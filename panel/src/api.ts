@@ -85,6 +85,16 @@ export const respondToApproval = async (
     await fetchAuthenticated(`approvals/${encodeURIComponent(id)}`, signal, { approved }, userId)
   );
 
+export const respondToQuestion = async (
+  id: string,
+  answer: string,
+  userId: string,
+  signal: AbortSignal
+) =>
+  packet<boolean>(
+    await fetchAuthenticated(`questions/${encodeURIComponent(id)}`, signal, { answer }, userId)
+  );
+
 export async function sendMessage(
   message: string,
   conversationId: string | undefined,

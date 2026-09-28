@@ -14,6 +14,7 @@ const string = { type: "string", minLength: 1, maxLength: 200 };
 const target = { daemonId: string, instanceUuid: string };
 const filePath = { type: "string", minLength: 1, maxLength: 1024 };
 const MAX_TEXT_BYTES = 64 * 1024;
+const GLOBAL_INSTANCE_UUID = "global0001";
 const hashText = (content: string) => createHash("sha256").update(content).digest("hex");
 const eventProperties = {
   autoStart: { type: "boolean" },
@@ -70,6 +71,21 @@ const waitDownloadDefinition = definition(
 export function toolDefinitions(admin: boolean, filesAllowed = false) {
   const tools = [
     definition(
+      "ask_user",
+      "Ask the user one necessary question when a missing decision materially changes the result and no reasonable safe default exists. Provide 2 to 5 clear, mutually exclusive options. The user may select an option or enter a custom answer. This blocks until the user answers; do not use it for sensitive-operation approval.",
+      {
+        question: { type: "string", minLength: 1, maxLength: 500 },
+        options: {
+          type: "array",
+          minItems: 2,
+          maxItems: 5,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 100 }
+        }
+      },
+      ["question", "options"]
+    ),
+    definition(
       "list_instances",
       "List only accessible instances. For admins, first list_nodes, then select a daemonId. Paginated; use exact IDs from results.",
       { daemonId: string, page: { type: "integer", minimum: 1, maximum: 10000 } }
@@ -111,9 +127,11 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
     ),
     definition(
       "list_java_runtimes",
-      "List Java runtimes available on a daemon for an accessible instance. Use the returned runtime id when configuring Java.",
+      admin
+        ? "List Java runtimes already registered in the panel on a daemon. Administrators may omit instanceUuid for a node-wide check. Always call this before checking the node system or downloading Java."
+        : "List Java runtimes available on a daemon for an accessible instance. Use the returned runtime id when configuring Java.",
       target,
-      Object.keys(target)
+      admin ? ["daemonId"] : Object.keys(target)
     ),
     definition(
       "configure_java",
@@ -177,13 +195,24 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
       ),
       definition(
         "download_java",
-        "Start downloading and installing a Java runtime from the MSL mirror catalog through the Java plugin. Supply an exact catalog version. Returns immediately with the runtime id; the panel tracks progress in the background. Continue other useful work, then use wait_download_task with taskType java when no other work remains.",
+        "Start downloading and installing a Java runtime from the MSL mirror catalog through the Java plugin. Before calling this, first use list_java_runtimes to confirm a matching panel runtime is absent, then use execute_node_command with a read-only Java version check to confirm the node system has no matching Java. Supply an exact catalog version. Returns immediately with the runtime id; the panel tracks progress in the background. Continue other useful work, then use wait_download_task with taskType java when no other work remains.",
         {
           daemonId: string,
           version: { type: "string", pattern: "^[1-9][0-9]{0,2}$" },
           name: { type: "string", enum: ["msl", "zulu"] }
         },
         ["daemonId", "version"]
+      ),
+      definition(
+        "execute_node_command",
+        "Execute one command in the selected node's system terminal and return only this command's bounded output and exit code. Administrator-only and sensitive. Prefer purpose-built tools; use this for read-only system inspection such as `java -version` before installing Java, or for an explicitly requested system command. One line only. A timeout stops waiting but may not terminate the command.",
+        {
+          daemonId: string,
+          command: { type: "string", minLength: 1, maxLength: 4096 },
+          timeoutSeconds: { type: "integer", minimum: 1, maximum: 30 },
+          maxChars: { type: "integer", minimum: 100, maximum: 32000 }
+        },
+        ["daemonId", "command"]
       ),
       definition("list_nodes", "List available daemon IDs and labels; no connection secrets.", {}),
       definition(
@@ -234,6 +263,7 @@ const sensitiveTools = new Set([
   "download_mod_batch",
   "configure_java",
   "download_java",
+  "execute_node_command",
   "edit_file",
   "create_file",
   "delete_file",
@@ -556,10 +586,16 @@ export class PanelTools {
     if (name === "list_java_runtimes") {
       this.keys(args, Object.keys(target));
       const daemonId = this.id(args.daemonId);
-      const instanceUuid = this.id(args.instanceUuid);
-      this.access(daemonId, instanceUuid);
+      const instanceUuid =
+        args.instanceUuid === undefined ? undefined : this.id(args.instanceUuid);
+      if (instanceUuid) this.access(daemonId, instanceUuid);
+      else if (!identity.elevated) this.fail("AI_FORBIDDEN");
       const result = await this.remote(daemonId).request("java_manager/list");
-      this.access(daemonId, instanceUuid);
+      if (instanceUuid) this.access(daemonId, instanceUuid);
+      else {
+        const current = this.identity();
+        if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
+      }
       if (!Array.isArray(result)) this.fail("AI_OPERATION_FAILED");
       return result.map((runtime: JsonObject) => this.javaSummary(runtime));
     }
@@ -648,6 +684,114 @@ export class PanelTools {
       operator_name: identity.userName
     });
     return { daemonId, instanceUuid, javaId, configured: true };
+  }
+
+  private async executeNodeCommand(
+    args: JsonObject,
+    identity: ReturnType<PanelTools["identity"]>
+  ) {
+    if (!identity.elevated) this.fail("AI_FORBIDDEN");
+    this.keys(args, ["daemonId", "command", "timeoutSeconds", "maxChars"]);
+    const daemonId = this.id(args.daemonId);
+    if (
+      typeof args.command !== "string" ||
+      !args.command.trim() ||
+      args.command.length > 4096 ||
+      /[\u0000-\u001f\u007f]/.test(args.command)
+    )
+      this.fail("AI_INVALID_TOOL");
+    const command = args.command.trim();
+    const timeoutSeconds = args.timeoutSeconds ?? 15;
+    const maxChars = args.maxChars ?? 16000;
+    if (
+      !Number.isInteger(timeoutSeconds) ||
+      timeoutSeconds < 1 ||
+      timeoutSeconds > 30 ||
+      !Number.isInteger(maxChars) ||
+      maxChars < 100 ||
+      maxChars > 32000
+    )
+      this.fail("AI_INVALID_TOOL");
+    const check = () => {
+      const current = this.identity();
+      if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
+    };
+    const remote = this.remote(daemonId);
+    const overview = await remote.request("info/overview");
+    check();
+    const platform = overview?.system?.platform;
+    if (typeof platform !== "string" || !platform || platform.length > 32)
+      this.fail("AI_OPERATION_FAILED");
+
+    let detail = await remote.request("instance/detail", { instanceUuid: GLOBAL_INSTANCE_UUID });
+    check();
+    if (detail?.instanceUuid !== GLOBAL_INSTANCE_UUID) this.fail("AI_OPERATION_FAILED");
+    if (detail.status === 0) {
+      await remote.request("instance/open", { instanceUuids: [GLOBAL_INSTANCE_UUID] });
+      check();
+    }
+    const startDeadline = Date.now() + 10_000;
+    while (detail.status !== 3 && Date.now() < startDeadline) {
+      if (![0, 2, 3].includes(detail.status)) this.fail("AI_BUSY");
+      await this.wait(200);
+      detail = await remote.request("instance/detail", { instanceUuid: GLOBAL_INSTANCE_UUID });
+      check();
+    }
+    if (detail.status !== 3) this.fail("AI_OPERATION_FAILED");
+
+    let baseline = "";
+    try {
+      const output = await remote.request("instance/outputlog", {
+        instanceUuid: GLOBAL_INSTANCE_UUID
+      });
+      if (typeof output === "string") baseline = output;
+    } catch {}
+    check();
+
+    const nonce = randomBytes(12).toString("hex");
+    const startMarker = `__ELEMENTS_AI_START_${nonce}__`;
+    const endMarker = `__ELEMENTS_AI_END_${nonce}__`;
+    const windows = platform === "win32";
+    const startCommand = windows
+      ? `echo ${startMarker}`
+      : `printf '%s\\n' '${startMarker}'`;
+    const endCommand = windows
+      ? `echo ${endMarker}:%ERRORLEVEL%`
+      : `printf '%s:%s\\n' '${endMarker}' "$?"`;
+    for (const line of [startCommand, command, endCommand]) {
+      await remote.request("instance/command", {
+        instanceUuid: GLOBAL_INSTANCE_UUID,
+        command: line
+      });
+      check();
+    }
+
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (Date.now() < deadline) {
+      await this.wait(200);
+      const output = await remote.request("instance/outputlog", {
+        instanceUuid: GLOBAL_INSTANCE_UUID
+      });
+      check();
+      if (typeof output !== "string") this.fail("AI_OPERATION_FAILED");
+      const delta = output.startsWith(baseline) ? output.slice(baseline.length) : output;
+      const plain = terminalText(delta, 20000, 512000).content;
+      const lines = plain.split("\n");
+      const start = lines.findIndex((line) => line.trim() === startMarker);
+      if (start < 0) continue;
+      for (let index = start + 1; index < lines.length; index++) {
+        const match = new RegExp(`^${endMarker}:(-?\\d+)$`).exec(lines[index].trim());
+        if (!match) continue;
+        const result = terminalText(lines.slice(start + 1, index).join("\n"), 20000, maxChars);
+        return {
+          daemonId,
+          platform,
+          exitCode: Number(match[1]),
+          ...result
+        };
+      }
+    }
+    this.fail("AI_OPERATION_FAILED");
   }
 
   private async deletionTool(name: string, args: JsonObject, identity: ReturnType<PanelTools["identity"]>) {
@@ -1275,6 +1419,7 @@ export class PanelTools {
       ) && !internalDownloadStatusTools.has(name)
     )
       this.fail("AI_FORBIDDEN");
+    if (name === "ask_user") this.fail("AI_INVALID_TOOL");
     if (beforeSensitive && sensitiveTools.has(name)) {
       // Check the account and target before asking, then recheck after the human
       // wait. Approval never grants additional instance or file permissions.
@@ -1284,7 +1429,8 @@ export class PanelTools {
         ![
           "create_instance",
           "create_msl_instance",
-          "download_java"
+          "download_java",
+          "execute_node_command"
         ].includes(name)
       )
         this.access(daemonId, this.id(args.instanceUuid));
@@ -1318,6 +1464,7 @@ export class PanelTools {
         options.waitForDownloads,
         options.onProgress
       );
+    if (name === "execute_node_command") return this.executeNodeCommand(args, identity);
     if (
       ["delete_instance_directory", "delete_instance", "delete_instance_completely"].includes(
         name

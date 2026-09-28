@@ -14,7 +14,13 @@ import {
   VSelect,
   VTextarea
 } from "vuetify/components";
-import { AccountChangedError, getStatus, respondToApproval, sendMessage } from "./api";
+import {
+  AccountChangedError,
+  getStatus,
+  respondToApproval,
+  respondToQuestion,
+  sendMessage
+} from "./api";
 import type {
   AiStatus,
   ChatEvent,
@@ -58,18 +64,26 @@ const modelOptions = computed(() => {
 });
 const messages = ref<ChatMessage[]>([]);
 const downloads = ref<DownloadActivity[]>([]);
+const downloadRemovalTimers = new Map<string, number>();
 const downloadsExpanded = ref(false);
 const downloadsMultiple = computed(() => downloads.value.length > 1);
 const draft = ref("");
 const conversationId = ref<string>();
 const loading = ref(false);
 const approvalSubmitting = ref("");
+const questionSubmitting = ref("");
+const questionAnswers = ref<Record<string, string>>({});
 const waitingForApproval = computed(() =>
   messages.value.some((message) => message.pending && message.approval)
 );
+const waitingForQuestion = computed(() =>
+  messages.value.some((message) => message.pending && message.question)
+);
 const retry = ref<Extract<ChatEvent, { type: "retry" }>>();
 const workingText = computed(() =>
-  waitingForApproval.value
+  waitingForQuestion.value
+    ? t("AI_WAITING_ANSWER")
+    : waitingForApproval.value
     ? t("AI_WAITING_APPROVAL")
     : retry.value
     ? t("AI_RETRYING", {
@@ -97,6 +111,7 @@ const canSend = computed(
     draft.value.length <= 4000
 );
 const toolIcons: Record<string, string> = {
+  ask_user: "mdi-comment-question-outline",
   list_mod_game_versions: "mdi-minecraft",
   search_mods: "mdi-puzzle-outline",
   list_mod_versions: "mdi-format-list-bulleted-type",
@@ -105,6 +120,7 @@ const toolIcons: Record<string, string> = {
   download_mod_batch: "mdi-download-multiple",
   get_mod_download_status: "mdi-cloud-check-outline",
   read_terminal: "mdi-console-line",
+  execute_node_command: "mdi-console-network-outline",
   list_msl_servers: "mdi-server",
   list_msl_versions: "mdi-format-list-numbered",
   list_msl_builds: "mdi-hammer-wrench",
@@ -166,20 +182,49 @@ const progressText = (progress?: ToolProgress) => {
   return parts.join(" · ");
 };
 
-function reset(clearDownloads = false) {
+function cancelDownloadRemoval(id: string) {
+  const timer = downloadRemovalTimers.get(id);
+  if (timer !== undefined) window.clearTimeout(timer);
+  downloadRemovalTimers.delete(id);
+}
+
+function removeDownload(id: string) {
+  cancelDownloadRemoval(id);
+  downloads.value = downloads.value.filter((task) => task.id !== id);
+  if (downloads.value.length <= 1) downloadsExpanded.value = false;
+}
+
+function scheduleDownloadRemoval(task: DownloadActivity) {
+  if (task.state !== "completed") {
+    cancelDownloadRemoval(task.id);
+    return;
+  }
+  if (downloadRemovalTimers.has(task.id)) return;
+  downloadRemovalTimers.set(
+    task.id,
+    window.setTimeout(() => removeDownload(task.id), 5_000)
+  );
+}
+
+function clearDownloads() {
+  for (const id of downloadRemovalTimers.keys()) cancelDownloadRemoval(id);
+  downloads.value = [];
+  downloadsExpanded.value = false;
+}
+
+function reset(shouldClearDownloads = false) {
   generation++;
   controller?.abort();
   statusController?.abort();
   messages.value = [];
-  if (clearDownloads) {
-    downloads.value = [];
-    downloadsExpanded.value = false;
-  }
+  if (shouldClearDownloads) clearDownloads();
   conversationId.value = undefined;
   draft.value = "";
   error.value = "";
   loading.value = false;
   approvalSubmitting.value = "";
+  questionSubmitting.value = "";
+  questionAnswers.value = {};
   retry.value = undefined;
   checking.value = false;
   canContinue.value = true;
@@ -207,7 +252,7 @@ function preferencesChanged(value: ChatPreferences) {
 }
 
 function accountChanged() {
-  downloads.value = [];
+  clearDownloads();
   newChat();
   status.value = undefined;
   selectedModel.value = "";
@@ -295,7 +340,12 @@ async function send() {
           conversationId.value = event.conversationId;
           messages.value = event.messages;
         } else if (event.type === "message") {
+          const previousQuestion = messages.value[event.index]?.question;
           messages.value[event.index] = event.message;
+          if (previousQuestion && !event.message.question) {
+            delete questionAnswers.value[previousQuestion.id];
+            if (questionSubmitting.value === previousQuestion.id) questionSubmitting.value = "";
+          }
         } else if (event.type === "delta") {
           const message = messages.value[event.index];
           if (message?.role === "assistant") message.content += event.content;
@@ -307,9 +357,9 @@ async function send() {
               if (downloads.value.length <= 2) downloadsExpanded.value = false;
             }
             else downloads.value[index] = event.task;
+            scheduleDownloadRemoval(event.task);
           } else {
-            downloads.value = downloads.value.filter((task) => task.id !== event.id);
-            if (downloads.value.length <= 1) downloadsExpanded.value = false;
+            removeDownload(event.id);
           }
         } else if (event.type === "done") {
           messages.value = messages.value.slice(-160);
@@ -348,12 +398,16 @@ async function send() {
         if (message.role === "tool" && message.pending) {
           message.pending = false;
           delete message.approval;
+          if (message.question) delete questionAnswers.value[message.question.id];
+          delete message.question;
           message.ok = false;
           message.content = t("AI_CHECK_RESULT");
         }
       }
       loading.value = false;
       approvalSubmitting.value = "";
+      questionSubmitting.value = "";
+      questionAnswers.value = {};
       retry.value = undefined;
       void scroll();
       void nextTick(() => input.value?.focus());
@@ -385,6 +439,36 @@ async function decideApproval(message: ChatMessage, approved: boolean) {
   } finally {
     if (version === generation && controller === current && approvalSubmitting.value === id)
       approvalSubmitting.value = "";
+  }
+}
+
+async function answerQuestion(message: ChatMessage, selected?: string) {
+  const id = message.question?.id;
+  const answer = (selected ?? (id ? questionAnswers.value[id] : "") ?? "").trim();
+  const current = controller;
+  if (
+    !id ||
+    !answer ||
+    answer.length > 1000 ||
+    !loading.value ||
+    !status.value ||
+    !current ||
+    current.signal.aborted ||
+    questionSubmitting.value
+  )
+    return;
+  const version = generation;
+  questionSubmitting.value = id;
+  error.value = "";
+  try {
+    await respondToQuestion(id, answer, status.value.userId, current.signal);
+  } catch (cause) {
+    if (version !== generation || controller !== current || current.signal.aborted) return;
+    if (cause instanceof AccountChangedError) accountChanged();
+    else error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    if (version === generation && controller === current && questionSubmitting.value === id)
+      questionSubmitting.value = "";
   }
 }
 
@@ -442,7 +526,7 @@ watch(
     }
   }
 );
-onBeforeUnmount(reset);
+onBeforeUnmount(() => reset(true));
 </script>
 
 <template>
@@ -584,6 +668,44 @@ onBeforeUnmount(reset);
                     @click="decideApproval(message, true)"
                   >
                     {{ t("AI_APPROVE_ONCE") }}
+                  </VBtn>
+                </div>
+              </div>
+              <div v-if="loading && message.pending && message.question" class="ai-question">
+                <p>{{ message.question.question }}</p>
+                <div class="ai-question-options">
+                  <VBtn
+                    v-for="option in message.question.options"
+                    :key="option"
+                    size="small"
+                    variant="tonal"
+                    :disabled="!!questionSubmitting"
+                    @click="answerQuestion(message, option)"
+                  >
+                    {{ option }}
+                  </VBtn>
+                </div>
+                <VTextarea
+                  v-model="questionAnswers[message.question.id]"
+                  class="ai-question-custom"
+                  :label="t('AI_CUSTOM_ANSWER')"
+                  :disabled="!!questionSubmitting"
+                  :maxlength="1000"
+                  rows="2"
+                  auto-grow
+                  hide-details
+                />
+                <div class="ai-question-actions">
+                  <VBtn
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    :disabled="
+                      !!questionSubmitting || !questionAnswers[message.question.id]?.trim()
+                    "
+                    @click="answerQuestion(message)"
+                  >
+                    {{ t("AI_SUBMIT_ANSWER") }}
                   </VBtn>
                 </div>
               </div>
@@ -1036,11 +1158,13 @@ onBeforeUnmount(reset);
   background: none;
   font-size: 12px;
 }
-.ai-approval {
+.ai-approval,
+.ai-question {
   margin: 8px 0 8px 26px;
   font-size: 13px;
 }
-.ai-approval p {
+.ai-approval p,
+.ai-question p {
   margin: 0 0 6px;
 }
 .ai-approval pre {
@@ -1051,6 +1175,20 @@ onBeforeUnmount(reset);
   justify-content: flex-end;
   gap: 4px;
   margin-top: 8px;
+}
+.ai-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ai-question-custom {
+  margin-top: 2px;
+}
+.ai-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 .ai-working {
   position: relative;

@@ -412,6 +412,89 @@ test("chat approvals show exact arguments, submit the user's decision and disapp
   }
 });
 
+test("chat questions block for an option or custom answer and disappear after settlement", async (t) => {
+  for (const custom of [false, true]) {
+    const pending = deferred();
+    const response = deferred();
+    const answers = [];
+    let emit;
+    let signal;
+    const question = {
+      id: custom ? "custom-question" : "option-question",
+      question: "Which Java should be used?",
+      options: ["Java 17", "Java 21"]
+    };
+    const f = sidebar({
+      sendMessage: async (_m, _c, _model, _user, value, onEvent) => {
+        emit = onEvent;
+        signal = value;
+        emit({
+          type: "message",
+          index: 1,
+          message: { role: "tool", tool: "ask_user", content: "", pending: true, question }
+        });
+        await pending.promise;
+      },
+      respondToQuestion: async (...args) => {
+        answers.push(args);
+        await response.promise;
+      }
+    });
+    t.after(() => {
+      response.resolve();
+      pending.resolve();
+      f.wrapper.unmount();
+    });
+    f.state.open = true;
+    await flushPromises();
+    await f.wrapper.get("textarea").setValue("Prepare Java");
+    await f.wrapper.get("form").trigger("submit");
+    assert.match(f.wrapper.get('[role="status"]').text(), /AI_WAITING_ANSWER/);
+    assert.equal(f.wrapper.get(".ai-question p").text(), question.question);
+    assert.deepEqual(
+      f.wrapper.findAll(".ai-question-options button").map((button) => button.text()),
+      question.options
+    );
+    const expected = custom ? "Use the system Java" : "Java 21";
+    if (custom) {
+      await f.wrapper.get(".ai-question textarea").setValue(expected);
+      await f.wrapper
+        .findAll(".ai-question button")
+        .find((button) => button.text() === "AI_SUBMIT_ANSWER")
+        .trigger("click");
+    } else {
+      await f.wrapper
+        .findAll(".ai-question-options button")
+        .find((button) => button.text() === expected)
+        .trigger("click");
+    }
+    assert.deepEqual(answers[0].slice(0, 3), [question.id, expected, "alice"]);
+    assert.equal(answers[0][3], signal);
+    assert.equal(
+      f.wrapper.findAll(".ai-question button").every((item) => item.element.disabled),
+      true
+    );
+    assert.equal(f.wrapper.get(".ai-question textarea").element.disabled, true);
+    emit({
+      type: "message",
+      index: 1,
+      message: {
+        role: "tool",
+        tool: "ask_user",
+        pending: false,
+        ok: true,
+        content: JSON.stringify({ answer: expected })
+      }
+    });
+    response.resolve();
+    await flushPromises();
+    assert.equal(f.wrapper.find(".ai-question").exists(), false);
+    pending.resolve();
+    await flushPromises();
+    assert.equal(signal.aborted, true);
+  }
+});
+
 test("stopping while awaiting approval removes its controls without granting permission", async (t) => {
   const pending = deferred();
   let signal;
@@ -552,7 +635,7 @@ test("frontend uses the host session token and blocks requests after an account 
   }
 });
 
-test("approval API sends only a decision and refuses submissions after account changes", async (t) => {
+test("interactive response APIs send only their answer and refuse submissions after account changes", async (t) => {
   let account = { uuid: "alice", token: "SESSION_TOKEN" };
   const requests = [];
   const oldFetch = global.fetch;
@@ -563,13 +646,18 @@ test("approval API sends only a decision and refuses submissions after account c
     requests.push(args);
     return { ok: true, json: async () => ({ status: 200, data: true }) };
   };
-  const { respondToApproval, AccountChangedError } = load("external/epanel-plugin-elements-ai/panel/src/api.ts", {
-    "@elements-panel/sdk": {
-      ctx: {
-        get: () => ({ api: { userInfoApi: () => ({ execute: async () => ({ value: account }) }) } })
+  const { respondToApproval, respondToQuestion, AccountChangedError } = load(
+    "external/epanel-plugin-elements-ai/panel/src/api.ts",
+    {
+      "@elements-panel/sdk": {
+        ctx: {
+          get: () => ({
+            api: { userInfoApi: () => ({ execute: async () => ({ value: account }) }) }
+          })
+        }
       }
     }
-  });
+  );
   const signal = new AbortController().signal;
   assert.equal(await respondToApproval("approval-id", false, "alice", signal), true);
   assert.equal(requests[0][0], "./api/ai/approvals/approval-id");
@@ -577,12 +665,17 @@ test("approval API sends only a decision and refuses submissions after account c
   assert.equal(requests[0][1].headers.Authorization, "Bearer SESSION_TOKEN");
   assert.deepEqual(JSON.parse(requests[0][1].body), { approved: false });
   assert.equal(requests[0][1].signal, signal);
+  assert.equal(await respondToQuestion("question-id", "Custom answer", "alice", signal), true);
+  assert.equal(requests[1][0], "./api/ai/questions/question-id");
+  assert.equal(requests[1][1].method, "POST");
+  assert.deepEqual(JSON.parse(requests[1][1].body), { answer: "Custom answer" });
+  assert.equal(requests[1][1].signal, signal);
   account = { uuid: "bob", token: "OTHER_TOKEN" };
   await assert.rejects(
     respondToApproval("approval-id", true, "alice", signal),
     AccountChangedError
   );
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
 });
 
 test("sidebar renders deltas while generation is pending and preserves partial text after interruption", async () => {

@@ -11,6 +11,12 @@ export interface ToolApproval {
   arguments: string;
 }
 
+export interface ToolQuestion {
+  id: string;
+  question: string;
+  options: string[];
+}
+
 export interface ToolProgress {
   value?: number;
   downloadedBytes?: number;
@@ -25,6 +31,7 @@ export interface DownloadActivity {
   id: string;
   tool: string;
   progress?: ToolProgress;
+  state?: string;
 }
 
 export interface ChatMessage {
@@ -35,6 +42,7 @@ export interface ChatMessage {
   pending?: boolean;
   diff?: FileDiff;
   approval?: ToolApproval;
+  question?: ToolQuestion;
 }
 
 export interface ChatResponse {

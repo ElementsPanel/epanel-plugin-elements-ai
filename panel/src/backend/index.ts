@@ -81,4 +81,8 @@ export async function apply(ctx: PanelPluginContext) {
     chat.respondToApproval(request, request.params.id, request.request.body);
     request.body = true;
   });
+  router.post("/questions/:id", permission, (request) => {
+    chat.respondToQuestion(request, request.params.id, request.request.body);
+    request.body = true;
+  });
 }

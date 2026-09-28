@@ -404,6 +404,72 @@ test("Java tools reuse the Java plugin and keep instance access scoped", async (
   );
 });
 
+test("Java installation discovery checks panel runtimes before the admin-only node terminal", async () => {
+  const f = fixture({ admin: true });
+  const definitions = f.load(source + "backend/tools.ts").toolDefinitions;
+  const adminNames = definitions(true, true).map((tool) => tool.function.name);
+  const userNames = definitions(false, true).map((tool) => tool.function.name);
+  assert.ok(adminNames.includes("execute_node_command"));
+  assert.ok(!userNames.includes("execute_node_command"));
+  assert.ok(adminNames.includes("ask_user"));
+  assert.ok(userNames.includes("ask_user"));
+
+  const commands = [];
+  let outputReads = 0;
+  f.remote(async (event, data) => {
+    if (event === "java_manager/list")
+      return [
+        {
+          info: { fullname: "msl_17", name: "msl", version: "17", downloading: false }
+        }
+      ];
+    if (event === "info/overview") return { system: { platform: "linux" } };
+    if (event === "instance/detail") return { instanceUuid: "global0001", status: 3 };
+    if (event === "instance/command") {
+      commands.push(data.command);
+      return true;
+    }
+    if (event === "instance/outputlog") {
+      if (outputReads++ === 0) return "old output\n";
+      const start = /(__ELEMENTS_AI_START_[a-f0-9]+__)/.exec(commands[0])?.[1];
+      const end = /(__ELEMENTS_AI_END_[a-f0-9]+__)/.exec(commands[2])?.[1];
+      return `old output\n${start}\nopenjdk version \"21.0.4\"\n${end}:0\n`;
+    }
+    throw new Error(`Unexpected event: ${event}`);
+  });
+
+  assert.deepEqual(await f.tools().execute("list_java_runtimes", { daemonId: "node-a" }), [
+    { id: "msl_17", name: "msl", version: "17", downloading: false }
+  ]);
+  const result = await f.tools().execute("execute_node_command", {
+    daemonId: "node-a",
+    command: "java -version"
+  });
+  assert.equal(result.daemonId, "node-a");
+  assert.equal(result.platform, "linux");
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.content, 'openjdk version "21.0.4"');
+  assert.equal(result.truncated, false);
+  assert.equal(commands.length, 3);
+  assert.equal(commands[1], "java -version");
+
+  const regular = fixture();
+  await assert.rejects(
+    regular.tools().execute("execute_node_command", {
+      daemonId: "node-a",
+      command: "java -version"
+    }),
+    /AI_FORBIDDEN/
+  );
+  await assert.rejects(
+    f.tools().execute("execute_node_command", {
+      daemonId: "node-a",
+      command: "java -version\necho bad"
+    }),
+    /AI_INVALID_TOOL/
+  );
+});
+
 test("unified download wait tool waits for Java completion and reports progress", async () => {
   const f = fixture({ admin: true });
   const definitions = f.load(source + "backend/tools.ts").toolDefinitions(true, true);
@@ -1412,6 +1478,7 @@ test("HTTP routes enforce authentication and disappear when the guard plugin unl
   assert.equal((await request("guest")).status, 403);
   assert.equal((await request("guest", "POST", "/api/ai/chat")).status, 403);
   assert.equal((await request("guest", "POST", "/api/ai/approvals/one")).status, 403);
+  assert.equal((await request("guest", "POST", "/api/ai/questions/one")).status, 403);
   assert.equal((await request("guest", "PUT", "/api/ai/models")).status, 403);
   assert.equal((await request("guest", "PUT", "/api/ai/preferences")).status, 403);
   assert.equal((await request("guest", "DELETE", "/api/ai/models/one")).status, 403);
@@ -1511,6 +1578,82 @@ test("default mode waits for an authenticated one-time decision before deleting 
     assert.ok(result.messages.some((message) => message.tool === "delete_file" && message.ok));
     assert.ok(result.messages.every((message) => !message.approval && !message.pending));
     assert.doesNotMatch(JSON.stringify(f.storageData.get("EpanelPluginElementsAiHistory:alice")), /"approval"/);
+  }
+});
+
+test("ask_user blocks model execution until an authenticated option or custom answer arrives", async (t) => {
+  let round = 0;
+  const f = fixture({
+    completion: async (_settings, messages) => {
+      round++;
+      if (round === 1)
+        return call("ask_user", {
+          question: "Which Java version should be used?",
+          options: ["Java 17", "Java 21"]
+        });
+      assert.deepEqual(JSON.parse(messages.at(-1).content), { answer: "Use the system Java" });
+      return answer("Continuing with the selected Java runtime.");
+    }
+  });
+  t.after(() => f.chat.dispose());
+  const notified = deferred();
+  const task = f.chat.chat(f.request({ message: "Prepare Java" }), async (event) => {
+    if (event.message?.question) notified.resolve(event.message.question);
+  });
+  const question = await Promise.race([
+    notified.promise,
+    task.then(() => assert.fail("Expected a blocking question"))
+  ]);
+  assert.match(question.id, /^[a-f0-9]{32}$/);
+  assert.equal(question.question, "Which Java version should be used?");
+  assert.deepEqual(question.options, ["Java 17", "Java 21"]);
+  assert.equal(round, 1, "the next model request must wait for the answer");
+  assert.throws(
+    () => f.chat.respondToQuestion(f.request({}, "bob"), question.id, { answer: "Java 21" }),
+    /AI_QUESTION_EXPIRED/
+  );
+  for (const body of [null, {}, { answer: "" }, { answer: "x", extra: true }])
+    assert.throws(
+      () => f.chat.respondToQuestion(f.request(), question.id, body),
+      /AI_INVALID_TOOL/
+    );
+  f.chat.respondToQuestion(f.request(), question.id, { answer: "  Use the system Java  " });
+  assert.throws(
+    () => f.chat.respondToQuestion(f.request(), question.id, { answer: "Java 21" }),
+    /AI_QUESTION_EXPIRED/
+  );
+  const result = await task;
+  assert.equal(round, 2);
+  assert.ok(result.messages.some((message) => message.tool === "ask_user" && message.ok));
+  assert.ok(result.messages.every((message) => !message.question && !message.pending));
+  assert.doesNotMatch(
+    JSON.stringify(f.storageData.get("EpanelPluginElementsAiHistory:alice")),
+    /"question"/
+  );
+});
+
+test("invalid ask_user questions fail without opening an interactive prompt", async (t) => {
+  const invalid = [
+    { question: "Choose", options: ["same", "same"] },
+    { question: "Choose", options: ["only one"] },
+    { question: "", options: ["A", "B"] },
+    { question: "Choose", options: ["A", "B"], extra: true }
+  ];
+  for (const [index, args] of invalid.entries()) {
+    let round = 0;
+    let prompted = false;
+    const f = fixture({
+      completion: async () => (++round === 1 ? call("ask_user", args) : answer())
+    });
+    t.after(() => f.chat.dispose());
+    const result = await f.chat.chat(f.request({ message: `Invalid question ${index}` }), async (event) => {
+      if (event.message?.question) prompted = true;
+    });
+    assert.equal(prompted, false);
+    assert.match(
+      result.messages.find((message) => message.tool === "ask_user").content,
+      /AI_INVALID_TOOL/
+    );
   }
 });
 
