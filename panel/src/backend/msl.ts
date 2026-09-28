@@ -50,7 +50,7 @@ export const mslDefinitions = [
   ),
   define(
     "download_msl_server",
-    "Start downloading a selected MSL artifact into a stopped accessible instance's root using a generated new filename. Requires an idle node file downloader and returns immediately with the generated path. Continue other independent work, then call get_msl_download_status when no useful work remains. Does not extract, install, change settings or start the server. Never retry an uncertain request.",
+    "Start downloading a selected MSL artifact into a stopped accessible instance's root using a generated new filename. Requires an idle node file downloader and returns immediately with the generated path. The panel tracks progress in the background. Continue other useful work, then use wait_download_task with taskType msl_download when no other work remains. Does not extract, install, change settings or start the server. Never retry an uncertain request.",
     { daemonId: id, instanceUuid: id, ...selection },
     ["daemonId", "instanceUuid", ...Object.keys(selection)]
   ),
@@ -62,7 +62,7 @@ export const mslDefinitions = [
   ),
   define(
     "create_msl_instance",
-    "Create an instance and start downloading/installing a selected MSL server. Returns immediately with the new instanceUuid and taskId. Continue other independent work, then call get_msl_install_status when no useful work remains. Supply a user-approved nickname, daemon ID, exact server/version/build, and optional existing Java executable path. Uses a new daemon-managed directory and generates the startup command. Forge/NeoForge run the official installer. Does not start the server or accept the Minecraft EULA. Never retry an uncertain creation.",
+    "Create an instance and start downloading/installing a selected MSL server. Returns immediately with the new instanceUuid and taskId; the panel tracks progress in the background. Continue other useful work, then use wait_download_task with taskType msl_install when no other work remains. Supply a user-approved nickname, daemon ID, exact server/version/build, and optional existing Java executable path. Uses a new daemon-managed directory and generates the startup command. Forge/NeoForge run the official installer. Does not start the server or accept the Minecraft EULA. Never retry an uncertain creation.",
     {
       daemonId: id,
       nickname: { type: "string", minLength: 1, maxLength: 100 },

@@ -93,7 +93,7 @@ export const modDefinitions = [
   ),
   define(
     "download_mod",
-    "Start downloading one catalog mod/plugin into an accessible instance only when requested. First search/list versions and inspect installed files; match the instance's Minecraft version/loader. Resolves fresh provider URLs, uses primary file unless fileName is supplied. Optional projectType chooses mods/plugins for hybrid servers; otherwise inferred from version loaders. Never overwrite unless explicitly requested (overwrite defaults false). Returns immediately with a taskId; continue other independent work, then call get_mod_download_status when no useful work remains. Does not remove old versions, install dependencies or restart.",
+    "Start downloading one catalog mod/plugin into an accessible instance only when requested. First search/list versions and inspect installed files; match the instance's Minecraft version/loader. Resolves fresh provider URLs, uses primary file unless fileName is supplied. Optional projectType chooses mods/plugins for hybrid servers; otherwise inferred from version loaders. Never overwrite unless explicitly requested (overwrite defaults false). Returns immediately with a taskId and the panel tracks progress in the background. Continue other useful work, then use wait_download_task with taskType mod when no other work remains. Does not remove old versions, install dependencies or restart.",
     {
       ...target,
       ...project,

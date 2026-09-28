@@ -58,6 +58,8 @@ const modelOptions = computed(() => {
 });
 const messages = ref<ChatMessage[]>([]);
 const downloads = ref<DownloadActivity[]>([]);
+const downloadsExpanded = ref(false);
+const downloadsMultiple = computed(() => downloads.value.length > 1);
 const draft = ref("");
 const conversationId = ref<string>();
 const loading = ref(false);
@@ -120,6 +122,7 @@ const toolIcons: Record<string, string> = {
   list_java_runtimes: "mdi-language-java",
   list_java_versions: "mdi-format-list-numbered",
   download_java: "mdi-download-circle-outline",
+  wait_download_task: "mdi-cloud-sync-outline",
   get_java_download_status: "mdi-progress-download",
   configure_java: "mdi-coffee-outline",
   delete_instance_directory: "mdi-folder-remove-outline",
@@ -168,7 +171,10 @@ function reset(clearDownloads = false) {
   controller?.abort();
   statusController?.abort();
   messages.value = [];
-  if (clearDownloads) downloads.value = [];
+  if (clearDownloads) {
+    downloads.value = [];
+    downloadsExpanded.value = false;
+  }
   conversationId.value = undefined;
   draft.value = "";
   error.value = "";
@@ -296,10 +302,14 @@ async function send() {
         } else if (event.type === "download") {
           if (event.action === "upsert") {
             const index = downloads.value.findIndex((task) => task.id === event.task.id);
-            if (index < 0) downloads.value = [...downloads.value, event.task];
+            if (index < 0) {
+              downloads.value = [...downloads.value, event.task];
+              if (downloads.value.length <= 2) downloadsExpanded.value = false;
+            }
             else downloads.value[index] = event.task;
           } else {
             downloads.value = downloads.value.filter((task) => task.id !== event.id);
+            if (downloads.value.length <= 1) downloadsExpanded.value = false;
           }
         } else if (event.type === "done") {
           messages.value = messages.value.slice(-160);
@@ -601,26 +611,58 @@ onBeforeUnmount(reset);
             <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
           </div>
         </div>
-        <div v-if="downloads.length" class="ai-downloads" role="status" aria-live="polite">
-          <div v-for="task in downloads" :key="task.id" class="ai-download-task">
-            <div class="ai-download-head">
-              <span class="ai-download-name">
-                <VIcon
-                  :icon="knownTool(task.tool) ? toolIcons[task.tool] : 'mdi-download-outline'"
-                  size="17"
-                />
-                <span>{{ toolLabelFor(task.tool) }}</span>
+        <Transition name="ai-download-panel">
+          <div
+            v-if="downloads.length"
+            class="ai-downloads"
+            :class="{ 'ai-downloads--multiple': downloadsMultiple }"
+            role="status"
+            aria-live="polite"
+          >
+            <button
+              v-if="downloadsMultiple"
+              class="ai-download-toggle"
+              type="button"
+              :aria-expanded="downloadsExpanded"
+              :aria-label="t('AI_DOWNLOAD_TOGGLE')"
+              :title="t('AI_DOWNLOAD_TOGGLE')"
+              @click="downloadsExpanded = !downloadsExpanded"
+            >
+              <span class="ai-download-summary">
+                <VIcon icon="mdi-download-multiple" size="17" />
+                <span>{{ t("AI_DOWNLOAD_TASKS", { count: downloads.length }) }}</span>
               </span>
-              <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
-            </div>
-            <VProgressLinear
-              :model-value="progressValue(task.progress) ?? 0"
-              color="primary"
-              height="5"
-              rounded
-            />
+              <VIcon :icon="downloadsExpanded ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="18" />
+            </button>
+            <Transition name="ai-download-list">
+              <TransitionGroup
+                v-if="!downloadsMultiple || downloadsExpanded"
+                name="ai-download-task"
+                tag="div"
+                class="ai-download-list"
+              >
+                <div v-for="task in downloads" :key="task.id" class="ai-download-task">
+                  <div class="ai-download-head">
+                    <span class="ai-download-name">
+                      <VIcon
+                        :icon="knownTool(task.tool) ? toolIcons[task.tool] : 'mdi-download-outline'"
+                        size="17"
+                      />
+                      <span>{{ toolLabelFor(task.tool) }}</span>
+                    </span>
+                    <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
+                  </div>
+                  <VProgressLinear
+                    :model-value="progressValue(task.progress) ?? 0"
+                    color="primary"
+                    height="5"
+                    rounded
+                  />
+                </div>
+              </TransitionGroup>
+            </Transition>
           </div>
-        </div>
+        </Transition>
         <form class="ai-composer" @submit.prevent="send">
           <VAlert
             v-if="!canContinue"
@@ -772,6 +814,53 @@ onBeforeUnmount(reset);
   padding: 10px 20px;
   border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
+.ai-downloads--multiple {
+  margin: 8px 20px 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface-variant), 0.18);
+}
+.ai-download-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 30px;
+  padding: 3px 2px;
+  border: 0;
+  color: rgba(var(--v-theme-on-surface), 0.82);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.ai-download-toggle:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 2px;
+}
+.ai-download-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ai-download-list {
+  display: grid;
+  gap: 8px;
+}
+.ai-download-list-enter-active,
+.ai-download-list-leave-active {
+  transition: opacity 180ms ease, max-height 180ms ease;
+  max-height: 400px;
+  overflow: hidden;
+}
+.ai-download-list-enter-from,
+.ai-download-list-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
 .ai-download-task {
   display: grid;
   gap: 4px;
@@ -804,6 +893,30 @@ onBeforeUnmount(reset);
   flex: 0 0 auto;
   color: rgba(var(--v-theme-on-surface), 0.62);
   white-space: nowrap;
+}
+.ai-download-panel-enter-active,
+.ai-download-panel-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.ai-download-panel-enter-from,
+.ai-download-panel-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.ai-download-task-enter-active,
+.ai-download-task-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease, max-height 180ms ease;
+  max-height: 100px;
+  overflow: hidden;
+}
+.ai-download-task-enter-from,
+.ai-download-task-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-5px);
+}
+.ai-download-task-move {
+  transition: transform 180ms ease;
 }
 .ai-messages {
   flex: 1;

@@ -384,6 +384,7 @@ test("Java tools reuse the Java plugin and keep instance access scoped", async (
     configured: true
   });
   assert.deepEqual(await f.tools().execute("list_java_versions", { daemonId: "node-a" }), {
+    source: "MSL",
     platform: "linux",
     arch: "x64",
     versions: ["17", "21"]
@@ -403,8 +404,18 @@ test("Java tools reuse the Java plugin and keep instance access scoped", async (
   );
 });
 
-test("Java download status waits for completion and reports progress", async () => {
+test("unified download wait tool waits for Java completion and reports progress", async () => {
   const f = fixture({ admin: true });
+  const definitions = f.load(source + "backend/tools.ts").toolDefinitions(true, true);
+  const names = definitions.map((tool) => tool.function.name);
+  assert.ok(names.includes("wait_download_task"));
+  for (const name of [
+    "get_java_download_status",
+    "get_mod_download_status",
+    "get_msl_download_status",
+    "get_msl_install_status"
+  ])
+    assert.ok(!names.includes(name));
   let polls = 0;
   f.remote(async (event) => {
     if (event === "java_manager/download")
@@ -433,8 +444,8 @@ test("Java download status waits for completion and reports progress", async () 
   assert.equal(receipt.id, "msl_21");
   const progress = [];
   const status = await f.tools().execute(
-    "get_java_download_status",
-    { daemonId: "node-a", javaId: "msl_21" },
+    "wait_download_task",
+    { taskType: "java", daemonId: "node-a", taskId: "msl_21" },
     undefined,
     undefined,
     { waitForDownloads: true, onProgress: (value) => progress.push(value) }

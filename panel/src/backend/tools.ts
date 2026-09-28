@@ -45,6 +45,27 @@ const definition = (
     parameters: { type: "object", properties, required, additionalProperties: false }
   }
 });
+const internalDownloadStatusTools = new Set([
+  "get_java_download_status",
+  "get_mod_download_status",
+  "get_msl_download_status",
+  "get_msl_install_status"
+]);
+const waitDownloadDefinition = definition(
+  "wait_download_task",
+  "Wait until one previously started download or installation reaches a terminal state. Use taskType java with taskId set to the returned Java runtime id; mod or msl_install with instanceUuid and the returned taskId; msl_download with instanceUuid and the returned path. Use exact returned identifiers. This blocks and reports progress, so finish other useful work first, then call it once when no other work remains.",
+  {
+    taskType: {
+      type: "string",
+      enum: ["java", "mod", "msl_download", "msl_install"]
+    },
+    daemonId: string,
+    instanceUuid: string,
+    taskId: string,
+    path: { type: "string", minLength: 1, maxLength: 255 }
+  },
+  ["taskType", "daemonId"]
+);
 
 export function toolDefinitions(admin: boolean, filesAllowed = false) {
   const tools = [
@@ -103,7 +124,7 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
   ];
   if (filesAllowed)
     tools.push(
-      ...modDefinitions,
+      ...modDefinitions.filter((tool) => !internalDownloadStatusTools.has(tool.function.name)),
       definition(
         "list_files",
         "List one directory inside an accessible instance. Paths are relative to its working directory; use '.' for the root. Pages start at 0. No absolute paths or '..'.",
@@ -147,28 +168,22 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
     );
   if (admin)
     tools.push(
-      ...mslDefinitions,
+      ...mslDefinitions.filter((tool) => !internalDownloadStatusTools.has(tool.function.name)),
       definition(
         "list_java_versions",
-        "List Java versions available from the Java plugin catalog on a daemon.",
+        "List Java versions available from the MSL mirror catalog on a daemon.",
         { daemonId: string },
         ["daemonId"]
       ),
       definition(
         "download_java",
-        "Start downloading and installing a Java runtime through the Java plugin. Supply an exact catalog version. Returns immediately with the runtime id; continue other independent work, then call get_java_download_status when no useful work remains.",
+        "Start downloading and installing a Java runtime from the MSL mirror catalog through the Java plugin. Supply an exact catalog version. Returns immediately with the runtime id; the panel tracks progress in the background. Continue other useful work, then use wait_download_task with taskType java when no other work remains.",
         {
           daemonId: string,
           version: { type: "string", pattern: "^[1-9][0-9]{0,2}$" },
           name: { type: "string", enum: ["msl", "zulu"] }
         },
         ["daemonId", "version"]
-      ),
-      definition(
-        "get_java_download_status",
-        "Wait for a previously started Java installation using its exact daemonId and javaId. In agent chat this call blocks and reports progress until the runtime completes or fails. Call it only after other useful tool work is finished.",
-        { daemonId: string, javaId: string },
-        ["daemonId", "javaId"]
       ),
       definition("list_nodes", "List available daemon IDs and labels; no connection secrets.", {}),
       definition(
@@ -204,6 +219,7 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
         Object.keys(target)
       )
     );
+  if (admin || filesAllowed) tools.push(waitDownloadDefinition);
   return tools;
 }
 
@@ -555,6 +571,7 @@ export class PanelTools {
       this.identity();
       if (!result || !Array.isArray(result.versions)) this.fail("AI_OPERATION_FAILED");
       return {
+        source: "MSL",
         platform: result.platform,
         arch: result.arch,
         versions: result.versions.filter((version: unknown) => typeof version === "string")
@@ -573,7 +590,7 @@ export class PanelTools {
         version: args.version
       });
       this.identity();
-      return this.javaSummary(result);
+      return { source: "MSL", ...this.javaSummary(result) };
     }
     if (name === "get_java_download_status") {
       if (!identity.elevated) this.fail("AI_FORBIDDEN");
@@ -1107,6 +1124,139 @@ export class PanelTools {
     return { daemonId, instanceUuid: detail.instanceUuid, status: detail.status, config: settings };
   }
 
+  private modAccess(
+    identity: ReturnType<PanelTools["identity"]>,
+    onProgress?: (progress: ToolProgress) => void | Promise<void>
+  ): Parameters<typeof executeModTool>[3] {
+    return {
+      fail: (key: string) => this.fail(key),
+      check: (target?: { daemonId: string; instanceUuid: string }) => {
+        if (this.identity().uuid !== identity.uuid || !this.filesAllowed())
+          this.fail("AI_FORBIDDEN");
+        if (target) this.fileAccess(target.daemonId, target.instanceUuid);
+      },
+      remote: (daemonId: string) => this.remote(daemonId),
+      signal: this.signal,
+      progress: onProgress,
+      wait: (milliseconds: number) => this.wait(milliseconds),
+      log: (
+        target: { daemonId: string; instanceUuid: string },
+        path: string,
+        selection: string
+      ) =>
+        this.ctx.operations.log("instance_file_download_from_url", {
+          daemon_id: target.daemonId,
+          instance_id: target.instanceUuid,
+          fileName: path,
+          url: selection,
+          operator_ip: this.request.ip,
+          operator_name: identity.userName
+        })
+    };
+  }
+
+  private async modTool(
+    name: string,
+    args: JsonObject,
+    identity: ReturnType<PanelTools["identity"]>,
+    waitForDownloads = false,
+    onProgress?: (progress: ToolProgress) => void | Promise<void>
+  ) {
+    const access = this.modAccess(identity, onProgress);
+    const result = await executeModTool(this.ctx, name, args, access);
+    if (name !== "get_mod_download_status" || !waitForDownloads) return result;
+    let status = result as JsonObject;
+    const publishProgress = () => {
+      const totalBytes = Number(status.totalBytes) || 0;
+      const downloadedBytes = Number(status.downloadedBytes) || 0;
+      return this.reportProgress(onProgress, {
+        value:
+          status.state === "completed"
+            ? 100
+            : totalBytes > 0
+            ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
+            : undefined,
+        downloadedBytes,
+        totalBytes
+      });
+    };
+    await publishProgress();
+    const deadline = Date.now() + DOWNLOAD_WAIT_TIMEOUT_MS;
+    while (status.state === "running" && Date.now() < deadline) {
+      await this.wait(500);
+      status = (await executeModTool(
+        this.ctx,
+        "get_mod_download_status",
+        args,
+        access
+      )) as JsonObject;
+      await publishProgress();
+    }
+    if (status.state === "running") this.fail("AI_OPERATION_FAILED");
+    return status;
+  }
+
+  private async waitDownloadTask(
+    args: JsonObject,
+    identity: ReturnType<PanelTools["identity"]>,
+    waitForDownloads = false,
+    onProgress?: (progress: ToolProgress) => void | Promise<void>
+  ) {
+    this.keys(args, ["taskType", "daemonId", "instanceUuid", "taskId", "path"]);
+    const taskType = args.taskType;
+    const daemonId = this.id(args.daemonId);
+    let result: unknown;
+    if (taskType === "java") {
+      if (args.instanceUuid !== undefined || args.path !== undefined)
+        this.fail("AI_INVALID_TOOL");
+      result = await this.javaTool(
+        "get_java_download_status",
+        { daemonId, javaId: this.id(args.taskId) },
+        identity,
+        waitForDownloads,
+        onProgress
+      );
+    } else if (taskType === "mod") {
+      if (args.path !== undefined) this.fail("AI_INVALID_TOOL");
+      result = await this.modTool(
+        "get_mod_download_status",
+        {
+          daemonId,
+          instanceUuid: this.id(args.instanceUuid),
+          taskId: this.id(args.taskId)
+        },
+        identity,
+        waitForDownloads,
+        onProgress
+      );
+    } else if (taskType === "msl_download") {
+      if (args.taskId !== undefined) this.fail("AI_INVALID_TOOL");
+      result = await this.mslTool(
+        "get_msl_download_status",
+        { daemonId, instanceUuid: this.id(args.instanceUuid), path: this.filePath(args.path) },
+        waitForDownloads,
+        onProgress
+      );
+    } else if (taskType === "msl_install") {
+      if (args.path !== undefined) this.fail("AI_INVALID_TOOL");
+      result = await this.mslTool(
+        "get_msl_install_status",
+        {
+          daemonId,
+          instanceUuid: this.id(args.instanceUuid),
+          taskId: this.id(args.taskId)
+        },
+        waitForDownloads,
+        onProgress
+      );
+    } else {
+      this.fail("AI_INVALID_TOOL");
+    }
+    return result && typeof result === "object" && !Array.isArray(result)
+      ? { taskType, ...(result as JsonObject) }
+      : result;
+  }
+
   async execute(
     name: string,
     value: unknown,
@@ -1122,7 +1272,7 @@ export class PanelTools {
     if (
       !toolDefinitions(identity.elevated, this.filesAllowed()).some(
         (tool) => tool.function.name === name
-      )
+      ) && !internalDownloadStatusTools.has(name)
     )
       this.fail("AI_FORBIDDEN");
     if (beforeSensitive && sensitiveTools.has(name)) {
@@ -1161,6 +1311,13 @@ export class PanelTools {
         options.waitForDownloads,
         options.onProgress
       );
+    if (name === "wait_download_task")
+      return this.waitDownloadTask(
+        args,
+        identity,
+        options.waitForDownloads,
+        options.onProgress
+      );
     if (
       ["delete_instance_directory", "delete_instance", "delete_instance_completely"].includes(
         name
@@ -1169,64 +1326,14 @@ export class PanelTools {
       return this.deletionTool(name, args, identity);
     if (mslDefinitions.some((tool) => tool.function.name === name))
       return this.mslTool(name, args, options.waitForDownloads, options.onProgress);
-    if (modDefinitions.some((tool) => tool.function.name === name)) {
-      const access: Parameters<typeof executeModTool>[3] = {
-        fail: (key: string) => this.fail(key),
-        check: (target?: { daemonId: string; instanceUuid: string }) => {
-          if (this.identity().uuid !== identity.uuid || !this.filesAllowed())
-            this.fail("AI_FORBIDDEN");
-          if (target) this.fileAccess(target.daemonId, target.instanceUuid);
-        },
-        remote: (daemonId: string) => this.remote(daemonId),
-        signal: this.signal,
-        progress: options.onProgress,
-        wait: (milliseconds: number) => this.wait(milliseconds),
-        log: (
-          target: { daemonId: string; instanceUuid: string },
-          path: string,
-          selection: string
-        ) =>
-          this.ctx.operations.log("instance_file_download_from_url", {
-            daemon_id: target.daemonId,
-            instance_id: target.instanceUuid,
-            fileName: path,
-            url: selection,
-            operator_ip: this.request.ip,
-            operator_name: identity.userName
-          })
-      };
-      const result = await executeModTool(this.ctx, name, args, access);
-      if (name !== "get_mod_download_status" || !options.waitForDownloads) return result;
-      let status = result as JsonObject;
-      const publishProgress = () => {
-        const totalBytes = Number(status.totalBytes) || 0;
-        const downloadedBytes = Number(status.downloadedBytes) || 0;
-        return this.reportProgress(options.onProgress, {
-          value:
-            status.state === "completed"
-              ? 100
-              : totalBytes > 0
-              ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
-              : undefined,
-          downloadedBytes,
-          totalBytes
-        });
-      };
-      await publishProgress();
-      const deadline = Date.now() + DOWNLOAD_WAIT_TIMEOUT_MS;
-      while (status.state === "running" && Date.now() < deadline) {
-        await this.wait(500);
-        status = (await executeModTool(
-          this.ctx,
-          "get_mod_download_status",
-          args,
-          access
-        )) as JsonObject;
-        await publishProgress();
-      }
-      if (status.state === "running") this.fail("AI_OPERATION_FAILED");
-      return status;
-    }
+    if (modDefinitions.some((tool) => tool.function.name === name))
+      return this.modTool(
+        name,
+        args,
+        identity,
+        options.waitForDownloads,
+        options.onProgress
+      );
     if (name === "read_terminal") {
       this.keys(args, [...Object.keys(target), "lines", "maxChars"]);
       const targetInstance = this.currentInstance({
