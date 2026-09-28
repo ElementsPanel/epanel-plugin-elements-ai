@@ -1,7 +1,7 @@
 {
   "id": "epanel-plugin-elements-ai",
-  "name": "epanel-plugin-elements-ai",
-  "displayName": "epanel-plugin-elements-ai",
+  "name": "Elements AI",
+  "displayName": "Elements AI",
   "version": "0.1.1",
   "description": "Chat with an AI assistant and manage instances within your account permissions.",
   "summary": "通过页眉聊天侧栏管理实例，支持管理员与普通用户的权限隔离。",
