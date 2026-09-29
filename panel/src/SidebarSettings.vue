@@ -55,25 +55,17 @@ onBeforeUnmount(() => controller.abort());
       <p class="text-body-2 mb-4">{{ t("AI_CHAT_SETTINGS_HELP") }}</p>
       <VAlert v-if="error" type="error" variant="tonal" :text="error" class="mb-3" />
       <form @submit.prevent="save">
-        <div class="ai-send-on-enter-row">
-          <VCheckbox
-            v-model="draft.sendOnEnter"
-            :label="t('AI_SEND_ON_ENTER')"
-            :disabled="busy"
-            hide-details
-          />
-          <VTooltip :text="t('AI_SEND_ON_ENTER_HELP')" location="top">
-            <template #activator="{ props: tooltipProps }">
-              <VBtn
-                v-bind="tooltipProps"
-                icon="mdi-information-outline"
-                size="x-small"
-                variant="text"
-                :aria-label="t('AI_SEND_ON_ENTER_HELP')"
-              />
-            </template>
-          </VTooltip>
-        </div>
+        <VTooltip :text="t('AI_SEND_ON_ENTER_HELP')" location="top">
+          <template #activator="{ props: tooltipProps }">
+            <VCheckbox
+              v-bind="tooltipProps"
+              v-model="draft.sendOnEnter"
+              :label="t('AI_SEND_ON_ENTER')"
+              :disabled="busy"
+              hide-details
+            />
+          </template>
+        </VTooltip>
         <div class="ai-settings-actions d-flex align-center ga-2 mt-4">
           <VBtn type="submit" color="primary" :disabled="busy" :loading="busy">{{
             t("AI_SAVE_SETTINGS")
@@ -118,14 +110,5 @@ onBeforeUnmount(() => controller.abort());
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-}
-.ai-send-on-enter-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.ai-send-on-enter-row > :deep(.v-checkbox) {
-  flex: 1;
-  min-width: 0;
 }
 </style>
