@@ -483,6 +483,12 @@ export class PanelTools {
           operator_name: operatorName
         }
       );
+      if (name === "create_file") {
+        // Publish the same bounded preview as edits, only after a successful write
+        // and a fresh permission check. A new file starts from empty content.
+        this.fileAccess(daemonId, instanceUuid);
+        onFileEdit?.(fileDiff(path, "", content!));
+      }
       return {
         daemonId,
         instanceUuid,

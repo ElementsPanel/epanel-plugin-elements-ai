@@ -778,7 +778,8 @@ onBeforeUnmount(() => reset(true));
               </div>
               <FileDiffView
                 v-if="
-                  message.tool === 'edit_file' && message.ok && !message.pending && message.diff
+                  (message.tool === 'edit_file' || message.tool === 'create_file') &&
+                  message.ok && !message.pending && message.diff
                 "
                 :diff="message.diff"
               />

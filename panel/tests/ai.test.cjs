@@ -2895,3 +2895,41 @@ test("Docker pull participates in chat background task tracking", async (t) => {
   assert.ok(f.calls.some((call) => call.event === "environment/progress"));
   assert.ok(events.some((event) => event.type === "download" && event.task?.progress?.value === 37));
 });
+
+
+test("new files publish addition diffs after success, including empty files", async () => {
+  const f = fileFixture();
+  const tools = f.tools();
+  const previews = [];
+  const result = await tools.execute("create_file", {
+    ...own, path: "new.txt", content: "Hello\n世界\n"
+  }, (diff) => previews.push(diff));
+  assert.equal(result.created, true);
+  assert.equal(Object.hasOwn(result, "diff"), false);
+  assert.deepEqual(previews[0], {
+    path: "new.txt", patch: "@@ -0,0 +1,2 @@\n+Hello\n+世界", truncated: false
+  });
+  await assert.rejects(tools.execute("create_file", {
+    ...own, path: "new.txt", content: "Overwrite"
+  }, (diff) => previews.push(diff)));
+  assert.equal(previews.length, 1);
+  await tools.execute("create_file", { ...own, path: "new-empty.txt", content: "" },
+    (diff) => previews.push(diff));
+  assert.deepEqual(previews[1], { path: "new-empty.txt", patch: "", truncated: false });
+});
+
+test("failed creates and revoked permissions never publish file previews", async () => {
+  for (const revoked of [false, true]) {
+    const f = fileFixture();
+    const tools = f.tools();
+    f.remote(async () => {
+      if (revoked) f.ctx.identity.accessPolicy.canFileManager = false;
+      return revoked;
+    });
+    let published = false;
+    await assert.rejects(tools.execute("create_file", {
+      ...own, path: "new.txt", content: "Hello"
+    }, () => { published = true; }));
+    assert.equal(published, false);
+  }
+});

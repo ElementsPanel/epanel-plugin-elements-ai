@@ -953,7 +953,8 @@ test("tool rows replace same-size spinners with distinct icons and mark only fai
   f.wrapper.unmount();
 });
 
-test("successful file edits show an escaped inline diff below the tool without opening its receipt", async () => {
+for (const tool of ["edit_file", "create_file"])
+test(`successful ${tool} shows an escaped inline diff below the tool without opening its receipt`, async () => {
   const pending = deferred();
   let emit;
   const f = sidebar({
@@ -966,7 +967,7 @@ test("successful file edits show an escaped inline diff below the tool without o
   await flushPromises();
   await f.wrapper.get("textarea").setValue("Edit the file");
   await f.wrapper.get("form").trigger("submit");
-  const message = { role: "tool", tool: "edit_file", pending: true, content: "" };
+  const message = { role: "tool", tool, pending: true, content: "" };
   emit({ type: "message", index: 1, message: { ...message } });
   await vue.nextTick();
   assert.equal(f.wrapper.find(".ai-file-diff").exists(), false);
