@@ -6,6 +6,7 @@ import { MODEL_REQUEST_TIMEOUT_MS, MODEL_RETRY_DELAYS_MS } from "../timing";
 import type { ResolvedModel } from "./settings";
 import { modelTransport } from "./transport";
 import { waitForRetry } from "./retry";
+import { chatCompletionsEndpoint } from "./model_endpoint";
 import type { toolDefinitions } from "./tools";
 
 export interface ToolCall {
@@ -149,9 +150,10 @@ async function completeOnce(
     Math.min(MODEL_REQUEST_TIMEOUT_MS, timeout)
   );
   try {
-    // Redirects are disabled to keep API credentials on the configured endpoint.
+    const endpoint = chatCompletionsEndpoint(model.endpoint);
+    // Redirects are disabled to keep API credentials on the configured API host.
     const response = await axios.post<Readable>(
-      model.endpoint,
+      endpoint,
       {
         model: model.model,
         messages,
@@ -166,7 +168,7 @@ async function completeOnce(
           : {})
       },
       {
-        ...modelTransport(model.endpoint, model.publicOnly),
+        ...modelTransport(endpoint, model.publicOnly),
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",

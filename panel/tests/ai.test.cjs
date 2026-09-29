@@ -120,7 +120,7 @@ function fixture({
   const calls = [];
   const logs = [];
   const config = {
-    endpoint: "https://ai.example/v1/chat/completions",
+    endpoint: "https://ai.example/v1",
     model: "tool-model",
     apiKey: "PROVIDER_SECRET",
     allowUsers: true
@@ -1207,7 +1207,7 @@ test("history rechecks ownership scopes and can resume with a changed model targ
   assert.deepEqual(await f.chat.listHistory(f.request()), []);
   await assert.rejects(f.chat.readHistory(f.request(), conversationId), /AI_EXPIRED/);
   f.users.get("alice").permission = 10;
-  f.config.endpoint = "https://new.example/v1/chat/completions";
+  f.config.endpoint = "https://new.example/v1";
   assert.equal((await f.chat.readHistory(f.request(), conversationId)).canContinue, true);
   const result = await f.chat.chat(f.request({ message: "Continue", conversationId }));
   assert.equal(result.messages.filter((message) => message.role === "user").length, 2);

@@ -45,7 +45,7 @@ const event = (delta, finish_reason = null) =>
 const model = {
   id: "one",
   name: "One",
-  endpoint: "https://api.example/v1/chat/completions",
+  endpoint: "https://api.example/v1",
   model: "model",
   apiKey: "SECRET",
   selectionId: "preset:one",
@@ -79,7 +79,7 @@ async function settingsFixture(legacy) {
 
 test("configuration exposes model loop protection and migrates legacy models safely", async () => {
   const f = await settingsFixture({
-    endpoint: model.endpoint,
+    endpoint: `${model.endpoint}/chat/completions`,
     model: model.model,
     apiKey: "SAVED_SECRET",
     allowUsers: false
@@ -91,7 +91,10 @@ test("configuration exposes model loop protection and migrates legacy models saf
   assert.equal(f.form.read().modelLoopProtection, true);
   assert.equal(f.models.modelLoopProtectionEnabled(), true);
   assert.doesNotMatch(JSON.stringify(f.form.read()), /SAVED_SECRET/);
-  assert.equal((await f.models.resolve("alice", "preset:default", false)).apiKey, "SAVED_SECRET");
+  const migrated = await f.models.resolve("alice", "preset:default", false);
+  assert.equal(migrated.apiKey, "SAVED_SECRET");
+  assert.equal(migrated.endpoint, model.endpoint);
+  assert.equal(f.form.read().presets[0].endpoint, model.endpoint);
   assert.equal(f.form.fields()[0].type, "boolean");
   assert.equal(f.form.fields()[1].type, "list");
   const { validatePluginSettings } = f.load("common/src/plugin_contract.ts");
@@ -99,7 +102,7 @@ test("configuration exposes model loop protection and migrates legacy models saf
   entries[0].name = "Renamed";
   entries.push({
     name: "Second",
-    endpoint: "http://localhost:11434/v1/chat/completions",
+    endpoint: "http://localhost:11434/v1",
     model: "local",
     apiKey: "LOCAL_SECRET"
   });
@@ -151,7 +154,7 @@ test("personal model CRUD is account-bound, persists across reloads and keeps se
   assert.equal((await f.models.resolve("alice", saved.id, false)).apiKey, "PERSONAL_SECRET");
   await f.models.save(
     "alice",
-    { ...input, id, apiKey: "", endpoint: "https://other.example/v1/chat/completions" },
+    { ...input, id, apiKey: "", endpoint: "https://other.example/v1" },
     false
   );
   assert.equal((await f.models.resolve("alice", saved.id, false)).apiKey, "");
@@ -379,7 +382,7 @@ test("regular personal endpoints block private IPv4, IPv6 and DNS rebinding; pre
     await assert.rejects(
       f.models.save(
         "alice",
-        { name: "x", model: "x", endpoint: `http://${host}/v1/chat/completions` },
+        { name: "x", model: "x", endpoint: `http://${host}/v1` },
         false
       ),
       /AI_PUBLIC_ENDPOINT/
@@ -388,7 +391,7 @@ test("regular personal endpoints block private IPv4, IPv6 and DNS rebinding; pre
   const local = {
     name: "Local",
     model: "x",
-    endpoint: "http://localhost:11434/v1/chat/completions"
+    endpoint: "http://localhost:11434/v1"
   };
   await f.models.save("alice", local, true);
   const [personal] = await f.models.list("alice");
@@ -481,9 +484,29 @@ test("provider streams Unicode text before completion and reconstructs fragmente
   assert.equal(toolRequests.length, 2);
   assert.equal(message.tool_calls[0].function.arguments, '{"page":1}');
   assert.equal(message.content, "你好");
+  assert.equal(requests[0][0], "https://api.example/v1/chat/completions");
   assert.equal(requests[0][1].stream, true);
   assert.equal(requests[0][2].responseType, "stream");
   assert.equal(requests[0][2].maxRedirects, 0);
+});
+
+test("model endpoint helpers keep base URLs and append the chat path exactly once", () => {
+  const { normalizeModelEndpoint, chatCompletionsEndpoint } = loader()(
+    source + "backend/model_endpoint.ts"
+  );
+  assert.equal(normalizeModelEndpoint("https://api.example/v1/"), "https://api.example/v1");
+  assert.equal(
+    normalizeModelEndpoint("https://api.example/v1/chat/completions/"),
+    "https://api.example/v1"
+  );
+  assert.equal(
+    chatCompletionsEndpoint("https://api.example/v1"),
+    "https://api.example/v1/chat/completions"
+  );
+  assert.equal(
+    chatCompletionsEndpoint("https://api.example/v1/chat/completions"),
+    "https://api.example/v1/chat/completions"
+  );
 });
 
 test("streaming requests apply each thinking level, explicit off and provider defaults", async () => {

@@ -2,6 +2,7 @@ import { randomBytes } from "crypto";
 import type { PanelPluginContext } from "../../../../../panel/src/app/plugin";
 import type { ModelOption, ThinkingEffort } from "../types";
 import { assertPublicEndpoint } from "./transport";
+import { normalizeModelEndpoint } from "./model_endpoint";
 
 export interface SavedModel {
   id: string;
@@ -40,6 +41,7 @@ function isThinkingEffort(value: unknown): value is ThinkingEffort {
 function normalizeModel(model: SavedModel): SavedModel {
   return {
     ...model,
+    endpoint: normalizeModelEndpoint(model.endpoint),
     thinkingEnabled: typeof model.thinkingEnabled === "boolean" ? model.thinkingEnabled : null,
     thinkingEffort: isThinkingEffort(model.thinkingEffort) ? model.thinkingEffort : "medium"
   };
@@ -190,7 +192,7 @@ function validateModel(ctx: PanelPluginContext, input: unknown, previous?: Saved
     return fail();
   const id = values.id === undefined ? randomBytes(12).toString("hex") : values.id;
   if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) return fail();
-  const endpoint = String(values.endpoint).trim();
+  const endpoint = normalizeModelEndpoint(String(values.endpoint));
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -245,7 +247,7 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
       {
         id: "default",
         name: stored.model,
-        endpoint: stored.endpoint,
+        endpoint: normalizeModelEndpoint(stored.endpoint),
         model: stored.model,
         apiKey: stored.apiKey || "",
         thinkingEnabled: null,

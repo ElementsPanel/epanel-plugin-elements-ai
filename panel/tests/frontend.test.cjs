@@ -1298,7 +1298,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
               id: "shared",
               name: "Shared",
               model: "m",
-              endpoint: "https://example.com/chat/completions",
+              endpoint: "https://example.com",
               apiKey: "KEEP_SECRET"
             }
           ]
@@ -1398,7 +1398,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(dialog().get("select").element.value, "");
   for (const [i, value] of [
     "New",
-    "https://new.example/chat/completions",
+    "https://new.example",
     "new-model",
     "NEW_SECRET"
   ].entries())
@@ -1547,7 +1547,7 @@ test("personal models use a compact list and modal drafts without discarding sid
   await f.wrapper.get('[data-label="AI_MODEL_LABEL"]').setValue("My model");
   await f.wrapper
     .get('[data-label="AI_ENDPOINT"]')
-    .setValue("https://api.example/v1/chat/completions");
+    .setValue("https://api.example/v1");
   await f.wrapper.get('[data-label="AI_MODEL"]').setValue("custom");
   await f.wrapper.get('[data-label="AI_API_KEY"]').setValue("PRIVATE_KEY");
   await f.wrapper.get('[data-label="AI_THINKING_ENABLED"]').setValue("true");
