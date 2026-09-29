@@ -67,7 +67,8 @@ function fixture({
   storageData = new Map(),
   mirrorResponse,
   modResponse,
-  permissionMode = "full"
+  permissionMode = "full",
+  maxCallsPerTool = 100
 } = {}) {
   const modCalls = [];
   const network = async (config) => {
@@ -228,7 +229,10 @@ function fixture({
     tools: (user = "alice") => new PanelTools(ctx, request(undefined, user)),
     chat: new ChatService(
       ctx,
-      { resolve: async (_user, selectionId) => ({ ...config, selectionId, publicOnly: false }) },
+      {
+        resolve: async (_user, selectionId) => ({ ...config, selectionId, publicOnly: false }),
+        maxCallsPerTool: () => maxCallsPerTool
+      },
       completion || (async () => answer())
     ),
     remote: (handler) => {
@@ -285,6 +289,35 @@ test("regular users can control their instance and patch only safe fields", asyn
     ["instance_start", "instance_config_change"]
   );
   assert.equal(f.logs[1].payload.operator_name, "Alice");
+});
+
+test("the assistant can start the same stopped instance twice in one turn", async () => {
+  let round = 0;
+  const f = fixture({
+    completion: async () => {
+      round++;
+      if (round === 1) return call("control_instance", { ...own, action: "start" }, "start-1");
+      if (round === 2) return call("get_instance", own, "check-stopped");
+      if (round === 3) return call("control_instance", { ...own, action: "start" }, "start-2");
+      return answer();
+    }
+  });
+  const result = await f.chat.chat(
+    f.request({ message: "Start once to generate the EULA, then start it again" })
+  );
+  assert.deepEqual(
+    f.calls.map((entry) => entry.event),
+    ["instance/open", "instance/detail", "instance/open"]
+  );
+  assert.deepEqual(
+    f.logs.map((entry) => entry.type),
+    ["instance_start", "instance_start"]
+  );
+  assert.equal(
+    result.messages.filter((message) => message.role === "tool" && message.ok).length,
+    3
+  );
+  assert.ok(!result.messages.some((message) => message.content.includes("AI_OPERATION_FAILED")));
 });
 
 test("forged admin tools, dangerous fields, globals and prototype keys never reach a daemon", async () => {
@@ -718,16 +751,16 @@ test("duplicate call IDs and runaway tool loops are bounded", async () => {
   const f = fixture({
     completion: async () => {
       rounds++;
-      if (rounds > 20) return answer();
+      if (rounds > 100) return answer();
       return call("control_instance", { ...own, action: "restart" });
     }
   });
   const result = await f.chat.chat(f.request());
   assert.equal(f.calls.length, 1);
-  assert.equal(rounds, 20);
+  assert.equal(rounds, 100);
   assert.equal(result.messages.at(-1).content, "AI_TOOL_LIMIT");
   const receipts = result.messages.filter((message) => message.role === "tool");
-  assert.equal(receipts.length, 20);
+  assert.equal(receipts.length, 100);
   assert.ok(receipts.slice(1).every((message) => message.content.includes("AI_INVALID_TOOL")));
 });
 
@@ -756,6 +789,7 @@ test("each tool accumulates across other tools and changed arguments, resetting 
   let rounds = 0;
   const f = fixture({
     admin: true,
+    maxCallsPerTool: 20,
     completion: async () => {
       if (++rounds > 39) return answer();
       return rounds % 2
@@ -788,7 +822,7 @@ test("each tool accumulates across other tools and changed arguments, resetting 
   }
 });
 
-test("the 20th call settles normally and later batched calls are cancelled with matching saved results", async () => {
+test("the configured final call settles normally and later batched calls are cancelled", async () => {
   const calls = [
     ...Array.from(
       { length: 21 },
@@ -798,6 +832,7 @@ test("the 20th call settles normally and later batched calls are cancelled with 
   ];
   let rounds = 0;
   const f = fixture({
+    maxCallsPerTool: 20,
     completion: async (_config, _messages, _tools, _signal, _timeout, _onDelta, onToolRequest) => {
       if (++rounds > 1) return answer();
       for (const item of calls) await onToolRequest(item.id, item.function.name);

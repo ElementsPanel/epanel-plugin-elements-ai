@@ -67,6 +67,7 @@ const downloads = ref<DownloadActivity[]>([]);
 const downloadRemovalTimers = new Map<string, number>();
 const downloadsExpanded = ref(false);
 const downloadsMultiple = computed(() => downloads.value.length > 1);
+const downloadStackTasks = computed(() => downloads.value.slice(-3).reverse());
 const draft = ref("");
 const conversationId = ref<string>();
 const loading = ref(false);
@@ -104,6 +105,8 @@ const checking = ref(false);
 const error = ref("");
 const list = ref<HTMLElement>();
 const input = ref<InstanceType<typeof VTextarea>>();
+const AUTO_SCROLL_THRESHOLD = 48;
+let autoScrollEnabled = true;
 let controller: AbortController | undefined;
 let statusController: AbortController | undefined;
 let generation = 0;
@@ -236,6 +239,7 @@ function reset(shouldClearDownloads = false) {
   checking.value = false;
   canContinue.value = true;
   historyModelName.value = "";
+  autoScrollEnabled = true;
 }
 
 function newChat() {
@@ -275,13 +279,28 @@ function openConversation(conversation: ConversationDetail) {
   messages.value = conversation.messages;
   canContinue.value = conversation.canContinue;
   showingHistory.value = false;
-  void scroll();
+  void scroll(true);
   void nextTick(() => input.value?.focus());
 }
 
-async function scroll() {
+function listScrolled() {
+  const element = list.value;
+  if (!element) return;
+  autoScrollEnabled =
+    element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_THRESHOLD;
+}
+
+async function scroll(force = false) {
+  if (!force && !autoScrollEnabled) return;
   await nextTick();
-  list.value?.scrollTo({ top: list.value.scrollHeight, behavior: "smooth" });
+  if (!force && !autoScrollEnabled) return;
+  const element = list.value;
+  if (!element) return;
+  element.scrollTo({
+    top: element.scrollHeight,
+    behavior: force ? "smooth" : "auto"
+  });
+  autoScrollEnabled = true;
 }
 
 async function refreshStatus() {
@@ -514,7 +533,7 @@ watch(
   async (open) => {
     if (open) {
       await refreshStatus();
-      void scroll();
+      void scroll(true);
       void nextTick(() => input.value?.focus());
     }
   }
@@ -621,6 +640,7 @@ onBeforeUnmount(() => reset(true));
           aria-live="polite"
           :aria-label="t('AI_MESSAGES')"
           :aria-busy="loading"
+          @scroll.passive="listScrolled"
         >
           <div v-if="!messages.length" class="ai-empty">
             <VIcon class="ai-welcome-icon" icon="mdi-creation" size="76" />
@@ -774,11 +794,37 @@ onBeforeUnmount(() => reset(true));
               :title="t('AI_DOWNLOAD_TOGGLE')"
               @click="downloadsExpanded = !downloadsExpanded"
             >
-              <span class="ai-download-summary">
-                <VIcon icon="mdi-download-multiple" size="17" />
-                <span>{{ t("AI_DOWNLOAD_TASKS", { count: downloads.length }) }}</span>
+              <span class="ai-download-toggle-head">
+                <span class="ai-download-summary">
+                  <VIcon icon="mdi-download-multiple" size="17" />
+                  <span>{{ t("AI_DOWNLOAD_TASKS", { count: downloads.length }) }}</span>
+                </span>
+                <VIcon
+                  :icon="downloadsExpanded ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                  size="18"
+                />
               </span>
-              <VIcon :icon="downloadsExpanded ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="18" />
+              <Transition name="ai-download-stack">
+                <span v-if="!downloadsExpanded" class="ai-download-stack" aria-hidden="true">
+                  <span
+                    v-for="(task, index) in downloadStackTasks"
+                    :key="task.id"
+                    class="ai-download-stack-card"
+                    :class="`ai-download-stack-card--${index}`"
+                  >
+                    <span class="ai-download-head">
+                      <span class="ai-download-name">
+                        <VIcon
+                          :icon="knownTool(task.tool) ? toolIcons[task.tool] : 'mdi-download-outline'"
+                          size="16"
+                        />
+                        <span>{{ toolLabelFor(task.tool) }}</span>
+                      </span>
+                      <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
+                    </span>
+                  </span>
+                </span>
+              </Transition>
             </button>
             <Transition name="ai-download-list">
               <TransitionGroup
@@ -962,24 +1008,33 @@ onBeforeUnmount(() => reset(true));
 }
 .ai-downloads--multiple {
   margin: 8px 20px 0;
-  padding: 8px 10px;
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-radius: 8px;
-  background: rgba(var(--v-theme-surface-variant), 0.18);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .ai-download-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: block;
   width: 100%;
   min-height: 30px;
-  padding: 3px 2px;
-  border: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
   color: rgba(var(--v-theme-on-surface), 0.82);
-  background: transparent;
+  background: rgba(var(--v-theme-surface-variant), 0.16);
   cursor: pointer;
   font: inherit;
   text-align: left;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+.ai-download-toggle:hover {
+  border-color: rgba(var(--v-theme-primary), 0.34);
+  background: rgba(var(--v-theme-surface-variant), 0.24);
+}
+.ai-download-toggle-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 .ai-download-toggle:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
@@ -992,9 +1047,63 @@ onBeforeUnmount(() => reset(true));
   font-size: 12px;
   font-weight: 600;
 }
+.ai-download-stack {
+  position: relative;
+  display: block;
+  height: 56px;
+  margin-top: 7px;
+}
+.ai-download-stack-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  height: 42px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--v-theme-primary), 0.2);
+  border-radius: 9px;
+  background: rgb(var(--v-theme-surface));
+  box-shadow: 0 5px 13px rgba(0, 0, 0, 0.13);
+  transform-origin: top center;
+  transition: transform 180ms ease, opacity 180ms ease, box-shadow 180ms ease;
+}
+.ai-download-stack-card--0 {
+  z-index: 3;
+  transform: translateY(0) scale(1);
+}
+.ai-download-stack-card--1 {
+  z-index: 2;
+  opacity: 0.84;
+  transform: translateY(7px) scale(0.97);
+}
+.ai-download-stack-card--2 {
+  z-index: 1;
+  opacity: 0.68;
+  transform: translateY(14px) scale(0.94);
+}
+.ai-download-toggle:hover .ai-download-stack-card--0 {
+  transform: translateY(-1px) scale(1);
+  box-shadow: 0 7px 17px rgba(0, 0, 0, 0.16);
+}
+.ai-download-stack .ai-download-head {
+  width: 100%;
+}
+.ai-download-stack-enter-active,
+.ai-download-stack-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.ai-download-stack-enter-from,
+.ai-download-stack-leave-to {
+  opacity: 0;
+  transform: translateY(5px) scale(0.98);
+}
 .ai-download-list {
   display: grid;
   gap: 8px;
+}
+.ai-downloads--multiple .ai-download-list {
+  margin-top: 8px;
 }
 .ai-download-list-enter-active,
 .ai-download-list-leave-active {

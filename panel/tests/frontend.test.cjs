@@ -1145,6 +1145,101 @@ test("personal settings only control sending and preserve the model selected in 
   f.wrapper.unmount();
 });
 
+test("streaming follows the conversation only while the user remains near the bottom", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      emit = onEvent;
+      await pending.promise;
+    }
+  });
+  t.after(() => {
+    pending.resolve();
+    f.wrapper.unmount();
+  });
+  f.state.open = true;
+  await flushPromises();
+  const messages = f.wrapper.get(".ai-messages");
+  const element = messages.element;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, value: 1000 },
+    clientHeight: { configurable: true, value: 200 },
+    scrollTop: { configurable: true, writable: true, value: 800 }
+  });
+  let scrolls = 0;
+  element.scrollTo = ({ top }) => {
+    scrolls++;
+    element.scrollTop = top;
+  };
+  await f.wrapper.get("textarea").setValue("Stream a reply");
+  await f.wrapper.get("form").trigger("submit");
+  await vue.nextTick();
+  scrolls = 0;
+
+  element.scrollTop = 200;
+  await messages.trigger("scroll");
+  emit({ type: "message", index: 1, message: { role: "assistant", content: "" } });
+  emit({ type: "delta", index: 1, content: "First fragment" });
+  await vue.nextTick();
+  assert.equal(scrolls, 0);
+
+  element.scrollTop = 800;
+  await messages.trigger("scroll");
+  emit({ type: "delta", index: 1, content: " and second" });
+  await vue.nextTick();
+  assert.ok(scrolls > 0);
+});
+
+test("multiple download tasks use a layered card stack while collapsed", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      emit = onEvent;
+      await pending.promise;
+    }
+  });
+  t.after(() => {
+    pending.resolve();
+    f.wrapper.unmount();
+  });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Install several resources");
+  await f.wrapper.get("form").trigger("submit");
+  for (const [index, tool] of ["download_java", "download_mod", "create_msl_instance"].entries())
+    emit({
+      type: "download",
+      action: "upsert",
+      task: {
+        id: `task-${index + 1}`,
+        tool,
+        state: "running",
+        progress: { value: (index + 1) * 20 }
+      }
+    });
+  await vue.nextTick();
+
+  assert.equal(f.wrapper.find(".ai-downloads--multiple").exists(), true);
+  const toggle = f.wrapper.get(".ai-download-toggle");
+  assert.equal(toggle.attributes("aria-expanded"), "false");
+  const cards = f.wrapper.findAll(".ai-download-stack-card");
+  assert.equal(cards.length, 3);
+  for (const [index, card] of cards.entries())
+    assert.equal(card.classes().includes(`ai-download-stack-card--${index}`), true);
+  assert.equal(f.wrapper.findAll(".ai-download-task").length, 0);
+
+  await toggle.trigger("click");
+  assert.equal(toggle.attributes("aria-expanded"), "true");
+  assert.equal(f.wrapper.findAll(".ai-download-stack-card").length, 0);
+  assert.equal(f.wrapper.findAll(".ai-download-task").length, 3);
+
+  await toggle.trigger("click");
+  assert.equal(toggle.attributes("aria-expanded"), "false");
+  assert.equal(f.wrapper.findAll(".ai-download-stack-card").length, 3);
+});
+
 test("leaving an account cancels preference saves and ignores their late completion", async () => {
   const pending = deferred();
   let signal;
@@ -1233,7 +1328,8 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   });
   assert.equal(wrapper.findAll("textarea").length, 0);
   assert.equal(wrapper.findAll("form").length, 1);
-  assert.equal(wrapper.findAll("input").length, 0);
+  assert.equal(wrapper.findAll('input[type="number"]').length, 1);
+  assert.equal(wrapper.get('input[type="number"]').element.value, "100");
   assert.equal(wrapper.get(".setting-list-name").text(), "Shared");
   assert.equal(wrapper.findAll('.setting-list-actions [aria-label="AI_EDIT_MODEL"]').length, 1);
   assert.equal(wrapper.findAll('.setting-list-actions [aria-label="AI_DELETE_MODEL"]').length, 1);
@@ -1312,7 +1408,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(dialogButton("TXT_CODE_d507abff").attributes("type"), "submit");
   await dialog().get("form").trigger("submit");
   await finishClose();
-  assert.equal(wrapper.findAll("input").length, 0);
+  assert.equal(wrapper.findAll('input[type="number"]').length, 1);
   assert.deepEqual(
     wrapper.findAll(".setting-list-name").map((row) => row.text()),
     ["Renamed", "New"]
@@ -1320,6 +1416,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(saved.length, 0);
   await wrapper.get("form").trigger("submit");
   await flushPromises();
+  assert.equal(saved.at(-1).maxCallsPerTool, 100);
   assert.equal(saved.at(-1).presets.length, 2);
   assert.equal(saved.at(-1).presets[0].name, "Renamed");
   assert.equal(saved.at(-1).presets[0].apiKey, "KEEP_SECRET");

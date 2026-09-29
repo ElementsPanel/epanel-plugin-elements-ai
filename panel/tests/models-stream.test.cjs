@@ -77,7 +77,7 @@ async function settingsFixture(legacy) {
   return { models, form, data, load, ctx };
 }
 
-test("configuration contains only a preset list and migrates the legacy model without exposing keys", async () => {
+test("configuration exposes the tool limit and migrates the legacy model without exposing keys", async () => {
   const f = await settingsFixture({
     endpoint: model.endpoint,
     model: model.model,
@@ -86,11 +86,16 @@ test("configuration contains only a preset list and migrates the legacy model wi
   });
   assert.deepEqual(
     f.form.fields().map((field) => field.key),
-    ["presets"]
+    ["maxCallsPerTool", "presets"]
   );
+  assert.equal(f.form.read().maxCallsPerTool, 100);
+  assert.equal(f.models.maxCallsPerTool(), 100);
   assert.doesNotMatch(JSON.stringify(f.form.read()), /SAVED_SECRET/);
   assert.equal((await f.models.resolve("alice", "preset:default", false)).apiKey, "SAVED_SECRET");
-  assert.equal(f.form.fields()[0].type, "list");
+  assert.equal(f.form.fields()[0].type, "number");
+  assert.equal(f.form.fields()[0].min, 1);
+  assert.equal(f.form.fields()[0].max, 1000);
+  assert.equal(f.form.fields()[1].type, "list");
   const { validatePluginSettings } = f.load("common/src/plugin_contract.ts");
   const entries = f.form.read().presets;
   entries[0].name = "Renamed";
@@ -101,7 +106,8 @@ test("configuration contains only a preset list and migrates the legacy model wi
     apiKey: "LOCAL_SECRET"
   });
   validatePluginSettings(f.form.fields(), { presets: entries });
-  await f.form.write({ presets: entries });
+  await f.form.write({ maxCallsPerTool: 250, presets: entries });
+  assert.equal(f.models.maxCallsPerTool(), 250);
   const list = await f.models.list("alice");
   assert.equal(list.length, 2);
   assert.ok(list.every((item) => item.source === "preset"));
@@ -112,6 +118,11 @@ test("configuration contains only a preset list and migrates the legacy model wi
   assert.equal((await f.models.resolve("alice", "preset:default", false)).apiKey, "");
   await f.form.write({ presets: [] });
   assert.deepEqual(await f.models.list("alice"), []);
+  for (const maxCallsPerTool of [0, 1.5, 1001, "100"])
+    await assert.rejects(
+      f.form.write({ maxCallsPerTool, presets: [] }),
+      /AI_INVALID_SETTINGS/
+    );
 });
 
 test("personal model CRUD is account-bound, persists across reloads and keeps secrets off read APIs", async () => {

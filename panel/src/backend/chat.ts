@@ -19,8 +19,6 @@ import { ModelSettingsError, type ModelStore } from "./settings";
 import { PanelTools, ToolError, toolDefinitions, type RequestContext } from "./tools";
 import { CHAT_TIMEOUT_MS, MODEL_RETRY_DELAYS_MS } from "../timing";
 
-const MAX_CALLS_PER_TOOL = 20;
-
 const modelTarget = (endpoint: string, model: string) =>
   createHash("sha256")
     .update(JSON.stringify([endpoint, model]))
@@ -224,7 +222,7 @@ export class ChatService {
 
   constructor(
     private ctx: PanelPluginContext,
-    private models: Pick<ModelStore, "resolve">,
+    private models: Pick<ModelStore, "resolve" | "maxCallsPerTool">,
     private completion = complete
   ) {
     this.history = new HistoryStore(ctx);
@@ -698,7 +696,9 @@ export class ChatService {
     const seen = new Set<string>();
     const mutations = new Set<string>();
     const toolCounts = new Map<string, number>();
+    const maxCallsPerTool = this.models.maxCallsPerTool();
     let repetitionLimitReached = false;
+    const toolLimitMessage = () => t("AI_TOOL_LIMIT", { limit: maxCallsPerTool });
     const publish = async (event: ChatEvent) => {
       try {
         await onEvent(event);
@@ -896,12 +896,12 @@ export class ChatService {
           try {
             // Settle every remaining call in this response without executing it,
             // so streamed rows and saved tool-call/result pairs stay complete.
-            if (repetitionLimitReached) throw new ToolError(t("AI_TOOL_LIMIT"));
+            if (repetitionLimitReached) throw new ToolError(toolLimitMessage());
             const count = (toolCounts.get(call.function.name) || 0) + 1;
             toolCounts.set(call.function.name, count);
             // Count requests, including invalid/failed ones and fresh arguments.
-            // The 20th request may execute; no later call may run in this turn.
-            repetitionLimitReached = count >= MAX_CALLS_PER_TOOL;
+            // The configured final request may execute; no later call may run in this turn.
+            repetitionLimitReached = count >= maxCallsPerTool;
             this.authorize(tools);
             if (controller.signal.aborted || Date.now() >= deadline)
               throw new ToolError(t("AI_INTERRUPTED"));
@@ -947,7 +947,6 @@ export class ChatService {
                 call.function.name === "download_mod_batch" ? `mod-batch:${call.id}` : undefined;
               if (
                 [
-                  "control_instance",
                   "update_instance",
                   "create_instance",
                   "create_msl_instance",
@@ -1068,7 +1067,7 @@ export class ChatService {
           });
         }
         if (repetitionLimitReached) {
-          const content = t("AI_TOOL_LIMIT");
+          const content = toolLimitMessage();
           turn.push({ role: "assistant", content });
           await append({ role: "error", content });
           break;
