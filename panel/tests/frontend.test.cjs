@@ -1590,7 +1590,8 @@ test("selecting a different model preserves the current conversation", async () 
   await f.wrapper.get("textarea").setValue("SECOND CHAT");
   await f.wrapper.get("form").trigger("submit");
   await flushPromises();
-  assert.equal(f.calls[1][1], f.calls[0][1]);
+  assert.equal(f.calls[0][1], undefined);
+  assert.equal(f.calls[1][1], "a".repeat(32));
   assert.equal(f.calls[1][2], "personal:mine");
   f.wrapper.unmount();
 });
