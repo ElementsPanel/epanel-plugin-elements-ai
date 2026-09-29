@@ -1001,17 +1001,15 @@ onBeforeUnmount(() => reset(true));
 }
 .ai-sidebar-page-enter-active,
 .ai-sidebar-page-leave-active {
-  transition: opacity 180ms ease, transform 180ms ease;
+  transition: opacity 180ms ease;
 }
 .ai-sidebar-page-enter-from,
 .ai-sidebar-page-leave-to {
   opacity: 0;
-  transform: translateY(6px);
 }
 .ai-sidebar-page-enter-to,
 .ai-sidebar-page-leave-from {
   opacity: 1;
-  transform: translateY(0);
 }
 .ai-downloads {
   flex: 0 0 auto;
