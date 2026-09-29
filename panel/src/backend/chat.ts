@@ -767,6 +767,22 @@ export class ChatService {
           }
           return requested;
         };
+        const ensureAssistant = async () => {
+          if (!assistant) {
+            assistant = { role: "assistant", content: "" };
+            assistantIndex = await append(assistant);
+          }
+          return assistant;
+        };
+        const completeReasoning = async () => {
+          if (!assistant?.reasoning || assistant.reasoningComplete) return;
+          assistant.reasoningComplete = true;
+          await publish({
+            type: "message",
+            index: assistantIndex,
+            message: { ...assistant }
+          });
+        };
         const message = await this.completion(
           config,
           [
@@ -793,19 +809,32 @@ export class ChatService {
           async (content) => {
             this.authorize(tools);
             if (tools.scope() !== scope) throw new ToolError(t("AI_FORBIDDEN"));
-            if (!assistant) {
-              assistant = { role: "assistant", content: "" };
-              assistantIndex = await append(assistant);
-            }
-            assistant.content += content;
+            const currentAssistant = await ensureAssistant();
+            await completeReasoning();
+            currentAssistant.content += content;
             await publish({ type: "delta", index: assistantIndex, content });
           },
           async (id, name) => {
             this.checkScope(tools, identity.uuid, scope);
+            await completeReasoning();
             await requestTool(id, name);
           },
           {
             beforeAttempt: async () => this.checkScope(tools, identity.uuid, scope),
+            onReasoning: async (content) => {
+              this.checkScope(tools, identity.uuid, scope);
+              const currentAssistant = await ensureAssistant();
+              if (currentAssistant.reasoningComplete) currentAssistant.reasoning = "";
+              currentAssistant.reasoningComplete = false;
+              currentAssistant.reasoning = (
+                (currentAssistant.reasoning || "") + content
+              ).slice(-4000);
+              await publish({
+                type: "message",
+                index: assistantIndex,
+                message: { ...currentAssistant }
+              });
+            },
             onRetry: async (attempt, delayMs) => {
               this.checkScope(tools, identity.uuid, scope);
               // Replace only this failed generation's partial output. Completed
@@ -832,9 +861,29 @@ export class ChatService {
         if (tools.scope() !== scope) throw new ToolError(t("AI_FORBIDDEN"));
         if (controller.signal.aborted) throw new ToolError(t("AI_INTERRUPTED"));
         turn.push(message);
-        if (message.content && !assistant)
-          await append({ role: "assistant", content: message.content });
-        if (!message.tool_calls?.length) break;
+        if (message.content && !assistant) {
+          assistant = { role: "assistant", content: message.content };
+          assistantIndex = await append(assistant);
+        } else if (message.content && assistant && assistant.content !== message.content) {
+          assistant.content = message.content;
+          await publish({
+            type: "message",
+            index: assistantIndex,
+            message: { ...assistant }
+          });
+        }
+        await completeReasoning();
+        if (!message.tool_calls?.length) {
+          if (assistant) {
+            assistant.workComplete = true;
+            await publish({
+              type: "message",
+              index: assistantIndex,
+              message: { ...assistant }
+            });
+          }
+          break;
+        }
         for (const call of message.tool_calls) {
           const requested = await requestTool(call.id, call.function.name);
           let result: unknown;

@@ -68,6 +68,7 @@ export async function complete(
   hooks: {
     onRetry?: (attempt: number, delayMs: number) => Promise<void>;
     beforeAttempt?: () => Promise<void>;
+    onReasoning?: (text: string) => Promise<void>;
   } = {}
 ): Promise<ModelMessage> {
   const deadline = Date.now() + timeout;
@@ -77,7 +78,16 @@ export async function complete(
     const remaining = deadline - Date.now();
     if (remaining <= 0 || signal.aborted) throw new Error("Stream interrupted");
     try {
-      return await completeOnce(model, messages, tools, signal, remaining, onDelta, onToolRequest);
+      return await completeOnce(
+        model,
+        messages,
+        tools,
+        signal,
+        remaining,
+        onDelta,
+        onToolRequest,
+        hooks.onReasoning || (async () => {})
+      );
     } catch (error) {
       if (signal.aborted || attempt >= MODEL_RETRY_DELAYS_MS.length || !retryable(error))
         throw new ProviderError("AI provider request failed", providerDetail(error));
@@ -119,7 +129,8 @@ async function completeOnce(
   signal: AbortSignal,
   timeout: number,
   onDelta: (text: string) => Promise<void>,
-  onToolRequest: (id: string, name: string) => Promise<void>
+  onToolRequest: (id: string, name: string) => Promise<void>,
+  onReasoning: (text: string) => Promise<void>
 ): Promise<ModelMessage> {
   const controller = new AbortController();
   let stream: Readable | undefined;
@@ -176,6 +187,7 @@ async function completeOnce(
     const calls = new Map<number, ToolCall>();
     const announced = new Map<number, string>();
     let content = "";
+    let reasoningLength = 0;
     let size = 0;
     let finished = false;
     let done = false;
@@ -197,6 +209,16 @@ async function completeOnce(
         if (finished) throw new Error("Content after completion");
         const delta = choice.delta || {};
         if (delta.role !== undefined && delta.role !== "assistant") throw new Error("Invalid role");
+        const reasoningValue =
+          delta.reasoning_content ??
+          delta.reasoning ??
+          delta.thinking?.content ??
+          delta.thinking;
+        if (typeof reasoningValue === "string" && reasoningValue) {
+          reasoningLength += reasoningValue.length;
+          if (reasoningLength > 48000) throw new Error("Reasoning content too large");
+          await onReasoning(reasoningValue);
+        }
         if (delta.content != null) {
           if (typeof delta.content !== "string" || content.length + delta.content.length > 24000)
             throw new Error("Invalid content");

@@ -80,6 +80,13 @@ const waitingForQuestion = computed(() =>
   messages.value.some((message) => message.pending && message.question)
 );
 const retry = ref<Extract<ChatEvent, { type: "retry" }>>();
+const activeReasoning = computed(() =>
+  messages.value.some(
+    (message) => message.role === "assistant" && message.reasoning && !message.reasoningComplete
+  )
+);
+const messageReasoning = (message: ChatMessage) =>
+  (message.reasoning || "").replace(/\s+/g, " ").trim().slice(-300);
 const workingText = computed(() =>
   waitingForQuestion.value
     ? t("AI_WAITING_ANSWER")
@@ -720,15 +727,32 @@ onBeforeUnmount(() => reset(true));
               <span v-if="message.role !== 'user'" class="ai-role">{{
                 t(message.role === "error" ? "AI_FAILED" : "AI_TITLE")
               }}</span>
+              <div
+                v-if="message.role === 'assistant' && messageReasoning(message)"
+                class="ai-message-thinking"
+                role="status"
+              >
+                <span class="ai-thinking-label">{{
+                  t(
+                    message.reasoningComplete
+                      ? "AI_THINKING_COMPLETE_PREFIX"
+                      : "AI_THINKING_PREFIX"
+                  )
+                }}</span>
+                <span class="ai-thinking-content">{{ messageReasoning(message) }}</span>
+              </div>
               <MarkdownMessage
                 v-if="message.role !== 'error'"
                 class="ai-text"
                 :content="message.content"
               />
               <div v-else class="ai-text">{{ message.content }}</div>
+              <div v-if="message.role === 'assistant' && message.workComplete" class="ai-work-complete">
+                {{ t("AI_WORK_COMPLETE") }}
+              </div>
             </template>
           </article>
-          <div v-if="loading" class="ai-working" role="status">
+          <div v-if="loading && !activeReasoning" class="ai-working" role="status">
             <span>{{ workingText }}</span>
             <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
           </div>
@@ -1192,12 +1216,39 @@ onBeforeUnmount(() => reset(true));
 }
 .ai-working {
   position: relative;
+  display: flex;
   width: fit-content;
+  max-width: 100%;
   margin: 6px 0 0;
   text-align: left;
   font-size: 13px;
   font-weight: 500;
   color: rgba(var(--v-theme-on-surface), 0.65);
+}
+.ai-message-thinking {
+  display: flex;
+  max-width: 100%;
+  margin: 2px 0 6px;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  font-size: 13px;
+  font-weight: 500;
+}
+.ai-thinking-label {
+  flex: none;
+  margin-right: 4px;
+}
+.ai-thinking-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-work-complete {
+  width: fit-content;
+  margin: 6px 0 0;
+  color: rgb(var(--v-theme-success));
+  font-size: 13px;
+  font-weight: 500;
 }
 .ai-working-shimmer {
   display: none;

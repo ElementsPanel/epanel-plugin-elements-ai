@@ -43,6 +43,9 @@ export interface ChatMessage {
   diff?: FileDiff;
   approval?: ToolApproval;
   question?: ToolQuestion;
+  reasoning?: string;
+  reasoningComplete?: boolean;
+  workComplete?: boolean;
 }
 
 export interface ChatResponse {

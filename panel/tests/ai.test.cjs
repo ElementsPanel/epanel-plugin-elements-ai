@@ -881,6 +881,45 @@ test("model changes preserve an existing conversation across providers", async (
   assert.equal(requests, 2);
 });
 
+test("chat keeps completed reasoning and work status on the saved assistant message", async (t) => {
+  const f = fixture({
+    completion: async (
+      _config,
+      _history,
+      _tools,
+      _signal,
+      _timeout,
+      _onDelta,
+      _onToolRequest,
+      hooks
+    ) => {
+      await hooks.onReasoning("Checking the node\n");
+      await hooks.onReasoning("Checking Java");
+      return answer("Done");
+    }
+  });
+  t.after(() => f.chat.dispose());
+  const events = [];
+  const result = await f.chat.chat(f.request({ message: "Check Java" }), async (event) => {
+    events.push(event);
+  });
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "message" && event.message.reasoning === "Checking the node\nChecking Java"
+    )
+  );
+  const assistant = result.messages.find((message) => message.role === "assistant");
+  assert.equal(assistant.content, "Done");
+  assert.equal(assistant.reasoning, "Checking the node\nChecking Java");
+  assert.equal(assistant.reasoningComplete, true);
+  assert.equal(assistant.workComplete, true);
+  assert.match(
+    JSON.stringify(f.storageData.get("EpanelPluginElementsAiHistory:alice")),
+    /Checking the node/
+  );
+});
+
 test("streamed tool receipts arrive before the final answer and personal models cannot elevate permissions", async () => {
   const waiting = deferred();
   const events = [];

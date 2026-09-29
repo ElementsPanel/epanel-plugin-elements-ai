@@ -708,6 +708,72 @@ test("sidebar renders deltas while generation is pending and preserves partial t
   f.wrapper.unmount();
 });
 
+test("sidebar keeps completed reasoning and work status beneath the assistant message", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      emit = onEvent;
+      await pending.promise;
+    }
+  });
+  t.after(() => {
+    pending.resolve();
+    f.wrapper.unmount();
+  });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Check Java");
+  await f.wrapper.get("form").trigger("submit");
+  emit({ type: "start", conversationId: "id", messages: [{ role: "user", content: "Check Java" }] });
+  emit({
+    type: "message",
+    index: 1,
+    message: { role: "assistant", content: "", reasoning: "先检查节点\n" }
+  });
+  emit({
+    type: "message",
+    index: 1,
+    message: { role: "assistant", content: "", reasoning: "先检查节点\n再确认 Java 版本" }
+  });
+  await vue.nextTick();
+  assert.equal(f.wrapper.get(".ai-thinking-label").text(), "AI_THINKING_PREFIX");
+  assert.equal(f.wrapper.get(".ai-thinking-content").text(), "先检查节点 再确认 Java 版本");
+  assert.equal(f.wrapper.findAll(".ai-thinking-content").length, 1);
+  emit({
+    type: "message",
+    index: 1,
+    message: {
+      role: "assistant",
+      content: "",
+      reasoning: "先检查节点\n再确认 Java 版本",
+      reasoningComplete: true
+    }
+  });
+  emit({ type: "delta", index: 1, content: "Java 21 is available." });
+  await vue.nextTick();
+  assert.equal(f.wrapper.get(".ai-thinking-label").text(), "AI_THINKING_COMPLETE_PREFIX");
+  assert.equal(f.wrapper.get(".ai-thinking-content").text(), "先检查节点 再确认 Java 版本");
+  emit({
+    type: "message",
+    index: 1,
+    message: {
+      role: "assistant",
+      content: "Java 21 is available.",
+      reasoning: "先检查节点\n再确认 Java 版本",
+      reasoningComplete: true,
+      workComplete: true
+    }
+  });
+  emit({ type: "done", conversationId: "id" });
+  await vue.nextTick();
+  assert.equal(f.wrapper.get(".ai-work-complete").text(), "AI_WORK_COMPLETE");
+  pending.resolve();
+  await flushPromises();
+  assert.equal(f.wrapper.get(".ai-thinking-label").text(), "AI_THINKING_COMPLETE_PREFIX");
+  assert.equal(f.wrapper.get(".ai-work-complete").text(), "AI_WORK_COMPLETE");
+});
+
 test("reconnection replaces partial messages, shows its status and can be stopped immediately", async (t) => {
   const pending = deferred();
   let emit;

@@ -412,6 +412,7 @@ test("provider streams Unicode text before completion and reconstructs fragmente
     }
   })(source + "backend/provider.ts");
   const deltas = [];
+  const reasoning = [];
   const toolRequests = [];
   let settled = false;
   const result = complete(
@@ -425,12 +426,20 @@ test("provider streams Unicode text before completion and reconstructs fragmente
     },
     async (id, name) => {
       toolRequests.push({ id, name });
+    },
+    {
+      onReasoning: async (delta) => {
+        reasoning.push(delta);
+      }
     }
   ).then((result) => {
     settled = true;
     return result;
   });
-  const first = Buffer.from(event({ role: "assistant", content: "你好" }));
+  stream.write(event({ role: "assistant", reasoning_content: "正在分析" }));
+  await tick();
+  assert.deepEqual(reasoning, ["正在分析"]);
+  const first = Buffer.from(event({ content: "你好" }));
   for (const byte of first) stream.write(Buffer.from([byte]));
   await tick();
   assert.deepEqual(deltas, ["你好"]);
