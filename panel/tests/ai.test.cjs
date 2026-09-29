@@ -67,8 +67,7 @@ function fixture({
   storageData = new Map(),
   mirrorResponse,
   modResponse,
-  permissionMode = "full",
-  maxCallsPerTool = 100
+  permissionMode = "full"
 } = {}) {
   const modCalls = [];
   const network = async (config) => {
@@ -229,10 +228,7 @@ function fixture({
     tools: (user = "alice") => new PanelTools(ctx, request(undefined, user)),
     chat: new ChatService(
       ctx,
-      {
-        resolve: async (_user, selectionId) => ({ ...config, selectionId, publicOnly: false }),
-        maxCallsPerTool: () => maxCallsPerTool
-      },
+      { resolve: async (_user, selectionId) => ({ ...config, selectionId, publicOnly: false }) },
       completion || (async () => answer())
     ),
     remote: (handler) => {
@@ -746,21 +742,21 @@ test("role and ownership changes during model execution cannot authorize tools",
   assert.ok(result.messages.some((message) => message.content.includes("AI_FORBIDDEN")));
 });
 
-test("duplicate call IDs and runaway tool loops are bounded", async () => {
+test("duplicate call IDs fail without imposing a cumulative tool limit", async () => {
   let rounds = 0;
   const f = fixture({
     completion: async () => {
       rounds++;
-      if (rounds > 100) return answer();
+      if (rounds > 3) return answer();
       return call("control_instance", { ...own, action: "restart" });
     }
   });
   const result = await f.chat.chat(f.request());
   assert.equal(f.calls.length, 1);
-  assert.equal(rounds, 100);
-  assert.equal(result.messages.at(-1).content, "AI_TOOL_LIMIT");
+  assert.equal(rounds, 4);
+  assert.equal(result.messages.at(-1).content, "Done");
   const receipts = result.messages.filter((message) => message.role === "tool");
-  assert.equal(receipts.length, 100);
+  assert.equal(receipts.length, 3);
   assert.ok(receipts.slice(1).every((message) => message.content.includes("AI_INVALID_TOOL")));
 });
 
@@ -785,86 +781,23 @@ test("mixed tools can finish after more than 8 model rounds and 16 total operati
   assert.ok(!result.messages.some((message) => message.role === "error"));
 });
 
-test("each tool accumulates across other tools and changed arguments, resetting for a new user message", async () => {
+test("the same read tool can run more than one hundred times in one turn", async () => {
   let rounds = 0;
   const f = fixture({
-    admin: true,
-    maxCallsPerTool: 20,
     completion: async () => {
-      if (++rounds > 39) return answer();
-      return rounds % 2
-        ? call(
-            "list_instances",
-            { daemonId: own.daemonId, page: (rounds + 1) / 2 },
-            `call-${rounds}`
-          )
-        : call("get_instance", own, `call-${rounds}`);
+      if (++rounds > 105) return answer();
+      return call("get_instance", own, `call-${rounds}`);
     }
   });
-  let conversationId;
-  for (let turn = 0; turn < 2; turn++) {
-    rounds = 0;
-    const result = await f.chat.chat(f.request({ message: "Continue", conversationId }));
-    conversationId = result.conversationId;
-    assert.equal(rounds, 39);
-    assert.equal(f.calls.length, (turn + 1) * 39);
-    assert.equal(result.messages.at(-1).content, "AI_TOOL_LIMIT");
-    const receipts = result.messages.filter((message) => message.role === "tool");
-    assert.ok(receipts.every((message) => message.ok && !message.pending));
-    assert.equal(
-      receipts.filter((message) => message.tool === "list_instances").length,
-      (turn + 1) * 20
-    );
-    assert.equal(
-      receipts.filter((message) => message.tool === "get_instance").length,
-      (turn + 1) * 19
-    );
-  }
-});
-
-test("the configured final call settles normally and later batched calls are cancelled", async () => {
-  const calls = [
-    ...Array.from(
-      { length: 21 },
-      (_, index) => call("get_instance", own, `read-${index}`).tool_calls[0]
-    ),
-    call("control_instance", { ...own, action: "start" }, "must-not-start").tool_calls[0]
-  ];
-  let rounds = 0;
-  const f = fixture({
-    maxCallsPerTool: 20,
-    completion: async (_config, _messages, _tools, _signal, _timeout, _onDelta, onToolRequest) => {
-      if (++rounds > 1) return answer();
-      for (const item of calls) await onToolRequest(item.id, item.function.name);
-      return { role: "assistant", content: null, tool_calls: calls };
-    }
-  });
-  const events = [];
-  const result = await f.chat.chat(f.request(), async (event) => events.push(event));
-  assert.equal(rounds, 1);
-  assert.equal(f.calls.length, 20);
-  assert.ok(f.calls.every((item) => item.event === "instance/detail"));
+  const result = await f.chat.chat(f.request());
+  assert.equal(rounds, 106);
+  assert.equal(f.calls.length, 105);
+  assert.ok(f.calls.every((entry) => entry.event === "instance/detail"));
   const receipts = result.messages.filter((message) => message.role === "tool");
-  assert.equal(receipts.length, 22);
-  assert.ok(receipts.slice(0, 20).every((message) => message.ok));
-  assert.ok(
-    receipts.slice(20).every((message) => !message.ok && message.content.includes("AI_TOOL_LIMIT"))
-  );
-  assert.ok(receipts.every((message) => !message.pending));
-  const updates = events.filter(
-    (event) => event.type === "message" && event.message.role === "tool"
-  );
-  assert.equal(updates.filter((event) => event.message.pending).length, 22);
-  assert.equal(updates.filter((event) => !event.message.pending).length, 22);
-  assert.equal(events.at(-1).type, "done");
-  const [saved] = f.storageData.get("EpanelPluginElementsAiHistory:alice").entries;
-  const messages = saved.turns.flat();
-  assert.deepEqual(
-    messages.filter((message) => message.role === "tool").map((message) => message.tool_call_id),
-    calls.map((item) => item.id)
-  );
-  assert.equal(messages.at(-1).content, "AI_TOOL_LIMIT");
-  assert.ok(saved.visible.every((message) => !message.pending));
+  assert.equal(receipts.length, 105);
+  assert.ok(receipts.every((message) => message.ok && !message.pending));
+  assert.equal(result.messages.at(-1).content, "Done");
+  assert.ok(!result.messages.some((message) => message.role === "error"));
 });
 
 test("repeated mutations with fresh tool IDs cannot create duplicate instances", async () => {

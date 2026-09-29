@@ -222,7 +222,7 @@ export class ChatService {
 
   constructor(
     private ctx: PanelPluginContext,
-    private models: Pick<ModelStore, "resolve" | "maxCallsPerTool">,
+    private models: Pick<ModelStore, "resolve">,
     private completion = complete
   ) {
     this.history = new HistoryStore(ctx);
@@ -695,10 +695,6 @@ export class ChatService {
     const visible: ChatMessage[] = [{ role: "user", content: body.message.trim() }];
     const seen = new Set<string>();
     const mutations = new Set<string>();
-    const toolCounts = new Map<string, number>();
-    const maxCallsPerTool = this.models.maxCallsPerTool();
-    let repetitionLimitReached = false;
-    const toolLimitMessage = () => t("AI_TOOL_LIMIT", { limit: maxCallsPerTool });
     const publish = async (event: ChatEvent) => {
       try {
         await onEvent(event);
@@ -894,14 +890,6 @@ export class ChatService {
           let downloadTool: string | undefined;
           let batchId: string | undefined;
           try {
-            // Settle every remaining call in this response without executing it,
-            // so streamed rows and saved tool-call/result pairs stay complete.
-            if (repetitionLimitReached) throw new ToolError(toolLimitMessage());
-            const count = (toolCounts.get(call.function.name) || 0) + 1;
-            toolCounts.set(call.function.name, count);
-            // Count requests, including invalid/failed ones and fresh arguments.
-            // The configured final request may execute; no later call may run in this turn.
-            repetitionLimitReached = count >= maxCallsPerTool;
             this.authorize(tools);
             if (controller.signal.aborted || Date.now() >= deadline)
               throw new ToolError(t("AI_INTERRUPTED"));
@@ -1065,12 +1053,6 @@ export class ChatService {
             index: requested.index,
             message: { ...requested.message }
           });
-        }
-        if (repetitionLimitReached) {
-          const content = toolLimitMessage();
-          turn.push({ role: "assistant", content });
-          await append({ role: "error", content });
-          break;
         }
       }
     } catch (error) {

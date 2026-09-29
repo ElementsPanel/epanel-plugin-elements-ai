@@ -1328,8 +1328,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   });
   assert.equal(wrapper.findAll("textarea").length, 0);
   assert.equal(wrapper.findAll("form").length, 1);
-  assert.equal(wrapper.findAll('input[type="number"]').length, 1);
-  assert.equal(wrapper.get('input[type="number"]').element.value, "100");
+  assert.equal(wrapper.findAll("input").length, 0);
   assert.equal(wrapper.get(".setting-list-name").text(), "Shared");
   assert.equal(wrapper.findAll('.setting-list-actions [aria-label="AI_EDIT_MODEL"]').length, 1);
   assert.equal(wrapper.findAll('.setting-list-actions [aria-label="AI_DELETE_MODEL"]').length, 1);
@@ -1408,7 +1407,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(dialogButton("TXT_CODE_d507abff").attributes("type"), "submit");
   await dialog().get("form").trigger("submit");
   await finishClose();
-  assert.equal(wrapper.findAll('input[type="number"]').length, 1);
+  assert.equal(wrapper.findAll("input").length, 0);
   assert.deepEqual(
     wrapper.findAll(".setting-list-name").map((row) => row.text()),
     ["Renamed", "New"]
@@ -1416,7 +1415,6 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(saved.length, 0);
   await wrapper.get("form").trigger("submit");
   await flushPromises();
-  assert.equal(saved.at(-1).maxCallsPerTool, 100);
   assert.equal(saved.at(-1).presets.length, 2);
   assert.equal(saved.at(-1).presets[0].name, "Renamed");
   assert.equal(saved.at(-1).presets[0].apiKey, "KEEP_SECRET");

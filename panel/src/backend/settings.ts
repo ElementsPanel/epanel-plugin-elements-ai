@@ -20,14 +20,9 @@ export interface ResolvedModel extends SavedModel {
 
 export class ModelSettingsError extends Error {}
 
-const DEFAULT_MAX_CALLS_PER_TOOL = 100;
-const MIN_MAX_CALLS_PER_TOOL = 1;
-const MAX_MAX_CALLS_PER_TOOL = 1000;
-
 // Legacy fields must remain declared for migration through the host entity loader.
 export class EpanelPluginElementsAiSettings {
   presets: SavedModel[] = [];
-  maxCallsPerTool = DEFAULT_MAX_CALLS_PER_TOOL;
   endpoint = "";
   model = "";
   apiKey = "";
@@ -49,26 +44,12 @@ function normalizeModel(model: SavedModel): SavedModel {
   };
 }
 
-function validMaxCallsPerTool(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= MIN_MAX_CALLS_PER_TOOL &&
-    value <= MAX_MAX_CALLS_PER_TOOL
-  );
-}
-
 export class ModelStore {
   private queues = new Map<string, Promise<unknown>>();
   constructor(
     private ctx: PanelPluginContext,
-    private presets: () => readonly SavedModel[],
-    private toolCallLimit: () => number = () => DEFAULT_MAX_CALLS_PER_TOOL
+    private presets: () => readonly SavedModel[]
   ) {}
-
-  maxCallsPerTool(): number {
-    return this.toolCallLimit();
-  }
 
   private async personal(userId: string): Promise<SavedModel[]> {
     const saved: PersonalModels | null = await this.ctx.storage
@@ -252,9 +233,6 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
   const stored: EpanelPluginElementsAiSettings =
     (await storage.load("EpanelPluginElementsAiSettings", EpanelPluginElementsAiSettings, "config")) || new EpanelPluginElementsAiSettings();
   let presets = (stored.presets || []).map(normalizeModel);
-  let maxCallsPerTool = validMaxCallsPerTool(stored.maxCallsPerTool)
-    ? stored.maxCallsPerTool
-    : DEFAULT_MAX_CALLS_PER_TOOL;
   if (!presets.length && stored.endpoint && stored.model) {
     presets = [
       {
@@ -267,22 +245,11 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
         thinkingEffort: "medium"
       }
     ];
-    await storage.store("EpanelPluginElementsAiSettings", "config", {
-      presets,
-      maxCallsPerTool
-    });
+    await storage.store("EpanelPluginElementsAiSettings", "config", { presets });
   }
   const t = ctx.i18n.$t;
   ctx.settingsForm.declare({
     fields: () => [
-      {
-        key: "maxCallsPerTool",
-        type: "number",
-        title: t("AI_MAX_CALLS_PER_TOOL"),
-        description: t("AI_MAX_CALLS_PER_TOOL_HELP"),
-        min: MIN_MAX_CALLS_PER_TOOL,
-        max: MAX_MAX_CALLS_PER_TOOL
-      },
       {
         key: "presets",
         type: "list",
@@ -344,7 +311,6 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
       }
     ],
     read: () => ({
-      maxCallsPerTool,
       presets: presets.map((item) => ({
         ...item,
         thinkingEnabled: item.thinkingEnabled ?? "",
@@ -355,14 +321,10 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
     }),
     write: async (values) => {
       if (
-        Object.keys(values).some((key) => !["presets", "maxCallsPerTool"].includes(key)) ||
+        Object.keys(values).some((key) => key !== "presets") ||
         !Array.isArray(values.presets) ||
         JSON.stringify(values.presets).length > 128_000
       )
-        throw new ModelSettingsError(t("AI_INVALID_SETTINGS"));
-      const nextMaxCallsPerTool =
-        values.maxCallsPerTool === undefined ? maxCallsPerTool : values.maxCallsPerTool;
-      if (!validMaxCallsPerTool(nextMaxCallsPerTool))
         throw new ModelSettingsError(t("AI_INVALID_SETTINGS"));
       const entries = values.presets;
       if (!Array.isArray(entries) || entries.length > 50)
@@ -376,13 +338,9 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
       );
       if (new Set(next.map((item) => item.id)).size !== next.length)
         throw new ModelSettingsError(t("AI_INVALID_SETTINGS"));
-      await storage.store("EpanelPluginElementsAiSettings", "config", {
-        presets: next,
-        maxCallsPerTool: nextMaxCallsPerTool
-      });
+      await storage.store("EpanelPluginElementsAiSettings", "config", { presets: next });
       presets = next;
-      maxCallsPerTool = nextMaxCallsPerTool;
     }
   });
-  return new ModelStore(ctx, () => presets, () => maxCallsPerTool);
+  return new ModelStore(ctx, () => presets);
 }
