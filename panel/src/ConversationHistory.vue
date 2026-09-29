@@ -17,6 +17,7 @@ import {
   listConversations
 } from "./api";
 import type { ConversationDetail, ConversationSummary } from "./types";
+import SidebarPageHeader from "./SidebarPageHeader.vue";
 
 const props = defineProps<{ userId: string; currentId?: string }>();
 const emit = defineEmits<{
@@ -98,18 +99,8 @@ onBeforeUnmount(() => controller?.abort());
 </script>
 
 <template>
-  <VCard :title="t('AI_HISTORY')" flat class="ai-history">
-    <template #prepend>
-      <VBtn
-        icon="mdi-arrow-left"
-        size="small"
-        variant="text"
-        :title="t('AI_BACK_CHAT')"
-        :aria-label="t('AI_BACK_CHAT')"
-        @click="emit('close')"
-      />
-    </template>
-    <template #append>
+  <VCard flat class="ai-history">
+    <SidebarPageHeader :title="t('AI_HISTORY')" :disabled="busy" @back="emit('close')">
       <VBtn
         v-if="conversations.length"
         :icon="allSelected ? 'mdi-checkbox-multiple-marked' : 'mdi-checkbox-multiple-blank-outline'"
@@ -141,7 +132,7 @@ onBeforeUnmount(() => controller?.abort());
         :aria-label="t('AI_HISTORY_REFRESH')"
         @click="refresh"
       />
-    </template>
+    </SidebarPageHeader>
     <VProgressLinear v-if="busy" indeterminate color="primary" height="2" />
     <VCardText>
       <p class="text-body-2 mb-4">{{ t("AI_HISTORY_HELP") }}</p>
@@ -181,6 +172,12 @@ onBeforeUnmount(() => controller?.abort());
 <style scoped>
 .ai-history {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ai-history > :deep(.v-card-text) {
   min-height: 0;
   overflow-y: auto;
 }

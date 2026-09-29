@@ -7,7 +7,6 @@ import {
   VBtn,
   VCard,
   VDialog,
-  VDivider,
   VIcon,
   VProgressCircular,
   VProgressLinear,
@@ -202,6 +201,10 @@ function removeDownload(id: string) {
   cancelDownloadRemoval(id);
   downloads.value = downloads.value.filter((task) => task.id !== id);
   if (downloads.value.length <= 1) downloadsExpanded.value = false;
+}
+
+function collapseDownloads() {
+  if (downloadsMultiple.value) downloadsExpanded.value = false;
 }
 
 function scheduleDownloadRemoval(task: DownloadActivity) {
@@ -609,30 +612,30 @@ onBeforeUnmount(() => reset(true));
           @click="state.open = false"
         />
       </template>
-      <VDivider />
-      <SidebarSettings
-        v-if="showingSettings && status"
-        :key="status.userId"
-        :user-id="status.userId"
-        :admin="status.admin"
-        :models="status.models"
-        :preferences="preferences"
-        @saved="preferencesChanged"
-        @models-changed="modelsChanged"
-        @close="showingSettings = false"
-        @plugin-settings="settings"
-        @account-changed="accountChanged"
-      />
-      <ConversationHistory
-        v-else-if="showingHistory && status"
-        :key="status.userId"
-        :user-id="status.userId"
-        :current-id="conversationId"
-        @open="openConversation"
-        @close="showingHistory = false"
-        @account-changed="accountChanged"
-      />
-      <template v-else>
+      <Transition name="ai-sidebar-page" mode="out-in">
+        <SidebarSettings
+          v-if="showingSettings && status"
+          :key="`settings:${status.userId}`"
+          :user-id="status.userId"
+          :admin="status.admin"
+          :models="status.models"
+          :preferences="preferences"
+          @saved="preferencesChanged"
+          @models-changed="modelsChanged"
+          @close="showingSettings = false"
+          @plugin-settings="settings"
+          @account-changed="accountChanged"
+        />
+        <ConversationHistory
+          v-else-if="showingHistory && status"
+          :key="`history:${status.userId}`"
+          :user-id="status.userId"
+          :current-id="conversationId"
+          @open="openConversation"
+          @close="showingHistory = false"
+          @account-changed="accountChanged"
+        />
+        <div v-else key="chat" class="ai-chat-page">
         <div
           ref="list"
           class="ai-messages"
@@ -784,28 +787,19 @@ onBeforeUnmount(() => reset(true));
             :class="{ 'ai-downloads--multiple': downloadsMultiple }"
             role="status"
             aria-live="polite"
+            @mouseleave="collapseDownloads"
           >
-            <button
-              v-if="downloadsMultiple"
-              class="ai-download-toggle"
-              type="button"
-              :aria-expanded="downloadsExpanded"
-              :aria-label="t('AI_DOWNLOAD_TOGGLE')"
-              :title="t('AI_DOWNLOAD_TOGGLE')"
-              @click="downloadsExpanded = !downloadsExpanded"
-            >
-              <span class="ai-download-toggle-head">
-                <span class="ai-download-summary">
-                  <VIcon icon="mdi-download-multiple" size="17" />
-                  <span>{{ t("AI_DOWNLOAD_TASKS", { count: downloads.length }) }}</span>
-                </span>
-                <VIcon
-                  :icon="downloadsExpanded ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                  size="18"
-                />
-              </span>
-              <Transition name="ai-download-stack">
-                <span v-if="!downloadsExpanded" class="ai-download-stack" aria-hidden="true">
+            <Transition name="ai-download-view" mode="out-in">
+              <button
+                v-if="downloadsMultiple && !downloadsExpanded"
+                key="stack"
+                class="ai-download-toggle"
+                type="button"
+                :aria-expanded="false"
+                :aria-label="t('AI_DOWNLOAD_TOGGLE')"
+                @click="downloadsExpanded = true"
+              >
+                <span class="ai-download-stack">
                   <span
                     v-for="(task, index) in downloadStackTasks"
                     :key="task.id"
@@ -824,34 +818,33 @@ onBeforeUnmount(() => reset(true));
                     </span>
                   </span>
                 </span>
-              </Transition>
-            </button>
-            <Transition name="ai-download-list">
-              <TransitionGroup
-                v-if="!downloadsMultiple || downloadsExpanded"
-                name="ai-download-task"
-                tag="div"
-                class="ai-download-list"
-              >
-                <div v-for="task in downloads" :key="task.id" class="ai-download-task">
-                  <div class="ai-download-head">
-                    <span class="ai-download-name">
-                      <VIcon
-                        :icon="knownTool(task.tool) ? toolIcons[task.tool] : 'mdi-download-outline'"
-                        size="17"
-                      />
-                      <span>{{ toolLabelFor(task.tool) }}</span>
-                    </span>
-                    <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
+              </button>
+              <div v-else key="list" class="ai-download-list-wrap">
+                <TransitionGroup
+                  name="ai-download-task"
+                  tag="div"
+                  class="ai-download-list"
+                >
+                  <div v-for="task in downloads" :key="task.id" class="ai-download-task">
+                    <div class="ai-download-head">
+                      <span class="ai-download-name">
+                        <VIcon
+                          :icon="knownTool(task.tool) ? toolIcons[task.tool] : 'mdi-download-outline'"
+                          size="17"
+                        />
+                        <span>{{ toolLabelFor(task.tool) }}</span>
+                      </span>
+                      <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
+                    </div>
+                    <VProgressLinear
+                      :model-value="progressValue(task.progress) ?? 0"
+                      color="primary"
+                      height="5"
+                      rounded
+                    />
                   </div>
-                  <VProgressLinear
-                    :model-value="progressValue(task.progress) ?? 0"
-                    color="primary"
-                    height="5"
-                    rounded
-                  />
-                </div>
-              </TransitionGroup>
+                </TransitionGroup>
+              </div>
             </Transition>
           </div>
         </Transition>
@@ -966,7 +959,8 @@ onBeforeUnmount(() => reset(true));
             </div>
           </div>
         </form>
-      </template>
+        </div>
+      </Transition>
     </VCard>
   </VDialog>
 </template>
@@ -999,6 +993,26 @@ onBeforeUnmount(() => reset(true));
   font-size: 15px;
   font-weight: 600;
 }
+.ai-chat-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.ai-sidebar-page-enter-active,
+.ai-sidebar-page-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.ai-sidebar-page-enter-from,
+.ai-sidebar-page-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.ai-sidebar-page-enter-to,
+.ai-sidebar-page-leave-from {
+  opacity: 1;
+  transform: translateY(0);
+}
 .ai-downloads {
   flex: 0 0 auto;
   display: grid;
@@ -1015,43 +1029,23 @@ onBeforeUnmount(() => reset(true));
 .ai-download-toggle {
   display: block;
   width: 100%;
-  min-height: 30px;
-  padding: 8px 10px 10px;
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-radius: 10px;
-  color: rgba(var(--v-theme-on-surface), 0.82);
-  background: rgba(var(--v-theme-surface-variant), 0.16);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
   cursor: pointer;
   font: inherit;
   text-align: left;
-  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
-}
-.ai-download-toggle:hover {
-  border-color: rgba(var(--v-theme-primary), 0.34);
-  background: rgba(var(--v-theme-surface-variant), 0.24);
-}
-.ai-download-toggle-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 .ai-download-toggle:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 2px;
-}
-.ai-download-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
+  outline: 2px solid rgba(var(--v-theme-primary), 0.7);
+  outline-offset: 4px;
+  border-radius: 10px;
 }
 .ai-download-stack {
   position: relative;
   display: block;
   height: 56px;
-  margin-top: 7px;
 }
 .ai-download-stack-card {
   position: absolute;
@@ -1089,12 +1083,12 @@ onBeforeUnmount(() => reset(true));
 .ai-download-stack .ai-download-head {
   width: 100%;
 }
-.ai-download-stack-enter-active,
-.ai-download-stack-leave-active {
+.ai-download-view-enter-active,
+.ai-download-view-leave-active {
   transition: opacity 180ms ease, transform 180ms ease;
 }
-.ai-download-stack-enter-from,
-.ai-download-stack-leave-to {
+.ai-download-view-enter-from,
+.ai-download-view-leave-to {
   opacity: 0;
   transform: translateY(5px) scale(0.98);
 }
@@ -1102,19 +1096,11 @@ onBeforeUnmount(() => reset(true));
   display: grid;
   gap: 8px;
 }
-.ai-downloads--multiple .ai-download-list {
-  margin-top: 8px;
-}
-.ai-download-list-enter-active,
-.ai-download-list-leave-active {
-  transition: opacity 180ms ease, max-height 180ms ease;
-  max-height: 400px;
+.ai-download-list-wrap {
   overflow: hidden;
 }
-.ai-download-list-enter-from,
-.ai-download-list-leave-to {
-  max-height: 0;
-  opacity: 0;
+.ai-downloads--multiple .ai-download-list-wrap {
+  margin-top: 8px;
 }
 .ai-download-task {
   display: grid;

@@ -155,6 +155,13 @@ function sidebar(api = {}) {
         () =>
           h("button", { disabled: props.disabled, type: props.type || "button" }, slots.default?.())
     }),
+    VTooltip: defineComponent({
+      props: ["text", "location"],
+      setup:
+        (_, { slots }) =>
+        () =>
+          slots.activator?.({ props: {} })
+    }),
     VTextarea: defineComponent({
       props: ["modelValue", "disabled"],
       emits: ["update:modelValue"],
@@ -1231,12 +1238,14 @@ test("multiple download tasks use a layered card stack while collapsed", async (
   assert.equal(f.wrapper.findAll(".ai-download-task").length, 0);
 
   await toggle.trigger("click");
-  assert.equal(toggle.attributes("aria-expanded"), "true");
+  await vue.nextTick();
+  assert.equal(f.wrapper.find(".ai-download-toggle").exists(), false);
   assert.equal(f.wrapper.findAll(".ai-download-stack-card").length, 0);
   assert.equal(f.wrapper.findAll(".ai-download-task").length, 3);
 
-  await toggle.trigger("click");
-  assert.equal(toggle.attributes("aria-expanded"), "false");
+  await f.wrapper.get(".ai-downloads--multiple").trigger("mouseleave");
+  await vue.nextTick();
+  assert.equal(f.wrapper.get(".ai-download-toggle").attributes("aria-expanded"), "false");
   assert.equal(f.wrapper.findAll(".ai-download-stack-card").length, 3);
 });
 

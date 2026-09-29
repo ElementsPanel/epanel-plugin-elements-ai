@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { VAlert, VBtn, VCard, VCardText, VCheckbox } from "vuetify/components";
+import { VAlert, VBtn, VCard, VCardText, VCheckbox, VTooltip } from "vuetify/components";
 import { AccountChangedError, savePreferences } from "./api";
 import type { ChatPreferences } from "./preferences";
 import type { ModelOption } from "./types";
 import ModelManager from "./ModelManager.vue";
+import SidebarPageHeader from "./SidebarPageHeader.vue";
 
 const props = defineProps<{
   preferences: ChatPreferences;
@@ -48,26 +49,31 @@ onBeforeUnmount(() => controller.abort());
 </script>
 
 <template>
-  <VCard :title="t('AI_CHAT_SETTINGS')" flat class="ai-sidebar-settings">
-    <template #prepend
-      ><VBtn
-        icon="mdi-arrow-left"
-        variant="text"
-        :aria-label="t('AI_BACK_CHAT')"
-        :disabled="busy"
-        @click="emit('close')"
-    /></template>
+  <VCard flat class="ai-sidebar-settings">
+    <SidebarPageHeader :title="t('AI_CHAT_SETTINGS')" :disabled="busy" @back="emit('close')" />
     <VCardText>
       <p class="text-body-2 mb-4">{{ t("AI_CHAT_SETTINGS_HELP") }}</p>
       <VAlert v-if="error" type="error" variant="tonal" :text="error" class="mb-3" />
       <form @submit.prevent="save">
-        <VCheckbox
-          v-model="draft.sendOnEnter"
-          :label="t('AI_SEND_ON_ENTER')"
-          :hint="t('AI_SEND_ON_ENTER_HELP')"
-          persistent-hint
-          :disabled="busy"
-        />
+        <div class="ai-send-on-enter-row">
+          <VCheckbox
+            v-model="draft.sendOnEnter"
+            :label="t('AI_SEND_ON_ENTER')"
+            :disabled="busy"
+            hide-details
+          />
+          <VTooltip :text="t('AI_SEND_ON_ENTER_HELP')" location="top">
+            <template #activator="{ props: tooltipProps }">
+              <VBtn
+                v-bind="tooltipProps"
+                icon="mdi-information-outline"
+                size="x-small"
+                variant="text"
+                :aria-label="t('AI_SEND_ON_ENTER_HELP')"
+              />
+            </template>
+          </VTooltip>
+        </div>
         <div class="ai-settings-actions d-flex align-center ga-2 mt-4">
           <VBtn type="submit" color="primary" :disabled="busy" :loading="busy">{{
             t("AI_SAVE_SETTINGS")
@@ -99,6 +105,27 @@ onBeforeUnmount(() => controller.abort());
 .ai-sidebar-settings {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ai-sidebar-settings > :deep(.v-card-text) {
+  flex: 0 0 auto;
+  max-height: 50%;
   overflow-y: auto;
+}
+.ai-sidebar-settings > :deep(.ai-model-manager) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.ai-send-on-enter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ai-send-on-enter-row > :deep(.v-checkbox) {
+  flex: 1;
+  min-width: 0;
 }
 </style>
