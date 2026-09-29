@@ -1329,6 +1329,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(wrapper.findAll("textarea").length, 0);
   assert.equal(wrapper.findAll("form").length, 1);
   assert.equal(wrapper.findAll("input").length, 0);
+  assert.equal(wrapper.findAll("select")[0].element.value, "true");
   assert.equal(wrapper.get(".setting-list-name").text(), "Shared");
   assert.equal(wrapper.findAll('.setting-list-actions [aria-label="AI_EDIT_MODEL"]').length, 1);
   assert.equal(wrapper.findAll('.setting-list-actions [aria-label="AI_DELETE_MODEL"]').length, 1);
@@ -1415,6 +1416,7 @@ test("preset model dialogs commit only confirmed drafts and preserve hidden keys
   assert.equal(saved.length, 0);
   await wrapper.get("form").trigger("submit");
   await flushPromises();
+  assert.equal(saved.at(-1).modelLoopProtection, true);
   assert.equal(saved.at(-1).presets.length, 2);
   assert.equal(saved.at(-1).presets[0].name, "Renamed");
   assert.equal(saved.at(-1).presets[0].apiKey, "KEEP_SECRET");

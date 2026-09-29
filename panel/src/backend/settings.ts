@@ -23,6 +23,7 @@ export class ModelSettingsError extends Error {}
 // Legacy fields must remain declared for migration through the host entity loader.
 export class EpanelPluginElementsAiSettings {
   presets: SavedModel[] = [];
+  modelLoopProtection = true;
   endpoint = "";
   model = "";
   apiKey = "";
@@ -48,8 +49,13 @@ export class ModelStore {
   private queues = new Map<string, Promise<unknown>>();
   constructor(
     private ctx: PanelPluginContext,
-    private presets: () => readonly SavedModel[]
+    private presets: () => readonly SavedModel[],
+    private loopProtection: () => boolean = () => true
   ) {}
+
+  modelLoopProtectionEnabled(): boolean {
+    return this.loopProtection();
+  }
 
   private async personal(userId: string): Promise<SavedModel[]> {
     const saved: PersonalModels | null = await this.ctx.storage
@@ -233,6 +239,7 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
   const stored: EpanelPluginElementsAiSettings =
     (await storage.load("EpanelPluginElementsAiSettings", EpanelPluginElementsAiSettings, "config")) || new EpanelPluginElementsAiSettings();
   let presets = (stored.presets || []).map(normalizeModel);
+  let modelLoopProtection = stored.modelLoopProtection !== false;
   if (!presets.length && stored.endpoint && stored.model) {
     presets = [
       {
@@ -245,11 +252,20 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
         thinkingEffort: "medium"
       }
     ];
-    await storage.store("EpanelPluginElementsAiSettings", "config", { presets });
+    await storage.store("EpanelPluginElementsAiSettings", "config", {
+      presets,
+      modelLoopProtection
+    });
   }
   const t = ctx.i18n.$t;
   ctx.settingsForm.declare({
     fields: () => [
+      {
+        key: "modelLoopProtection",
+        type: "boolean",
+        title: t("AI_MODEL_LOOP_PROTECTION"),
+        description: t("AI_MODEL_LOOP_PROTECTION_HELP")
+      },
       {
         key: "presets",
         type: "list",
@@ -311,6 +327,7 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
       }
     ],
     read: () => ({
+      modelLoopProtection,
       presets: presets.map((item) => ({
         ...item,
         thinkingEnabled: item.thinkingEnabled ?? "",
@@ -321,10 +338,18 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
     }),
     write: async (values) => {
       if (
-        Object.keys(values).some((key) => key !== "presets") ||
+        Object.keys(values).some(
+          (key) => !["presets", "modelLoopProtection"].includes(key)
+        ) ||
         !Array.isArray(values.presets) ||
         JSON.stringify(values.presets).length > 128_000
       )
+        throw new ModelSettingsError(t("AI_INVALID_SETTINGS"));
+      const nextModelLoopProtection =
+        values.modelLoopProtection === undefined
+          ? modelLoopProtection
+          : values.modelLoopProtection;
+      if (typeof nextModelLoopProtection !== "boolean")
         throw new ModelSettingsError(t("AI_INVALID_SETTINGS"));
       const entries = values.presets;
       if (!Array.isArray(entries) || entries.length > 50)
@@ -338,9 +363,13 @@ export async function registerSettings(ctx: PanelPluginContext): Promise<ModelSt
       );
       if (new Set(next.map((item) => item.id)).size !== next.length)
         throw new ModelSettingsError(t("AI_INVALID_SETTINGS"));
-      await storage.store("EpanelPluginElementsAiSettings", "config", { presets: next });
+      await storage.store("EpanelPluginElementsAiSettings", "config", {
+        presets: next,
+        modelLoopProtection: nextModelLoopProtection
+      });
       presets = next;
+      modelLoopProtection = nextModelLoopProtection;
     }
   });
-  return new ModelStore(ctx, () => presets);
+  return new ModelStore(ctx, () => presets, () => modelLoopProtection);
 }

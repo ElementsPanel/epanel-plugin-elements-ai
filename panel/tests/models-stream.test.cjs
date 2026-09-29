@@ -77,7 +77,7 @@ async function settingsFixture(legacy) {
   return { models, form, data, load, ctx };
 }
 
-test("configuration contains only a preset list and migrates the legacy model without exposing keys", async () => {
+test("configuration exposes model loop protection and migrates legacy models safely", async () => {
   const f = await settingsFixture({
     endpoint: model.endpoint,
     model: model.model,
@@ -86,11 +86,14 @@ test("configuration contains only a preset list and migrates the legacy model wi
   });
   assert.deepEqual(
     f.form.fields().map((field) => field.key),
-    ["presets"]
+    ["modelLoopProtection", "presets"]
   );
+  assert.equal(f.form.read().modelLoopProtection, true);
+  assert.equal(f.models.modelLoopProtectionEnabled(), true);
   assert.doesNotMatch(JSON.stringify(f.form.read()), /SAVED_SECRET/);
   assert.equal((await f.models.resolve("alice", "preset:default", false)).apiKey, "SAVED_SECRET");
-  assert.equal(f.form.fields()[0].type, "list");
+  assert.equal(f.form.fields()[0].type, "boolean");
+  assert.equal(f.form.fields()[1].type, "list");
   const { validatePluginSettings } = f.load("common/src/plugin_contract.ts");
   const entries = f.form.read().presets;
   entries[0].name = "Renamed";
@@ -101,7 +104,12 @@ test("configuration contains only a preset list and migrates the legacy model wi
     apiKey: "LOCAL_SECRET"
   });
   validatePluginSettings(f.form.fields(), { presets: entries });
-  await f.form.write({ presets: entries });
+  await f.form.write({ modelLoopProtection: false, presets: entries });
+  assert.equal(f.models.modelLoopProtectionEnabled(), false);
+  assert.equal(
+    f.data.get("EpanelPluginElementsAiSettings:config").modelLoopProtection,
+    false
+  );
   const list = await f.models.list("alice");
   assert.equal(list.length, 2);
   assert.ok(list.every((item) => item.source === "preset"));
@@ -112,6 +120,10 @@ test("configuration contains only a preset list and migrates the legacy model wi
   assert.equal((await f.models.resolve("alice", "preset:default", false)).apiKey, "");
   await f.form.write({ presets: [] });
   assert.deepEqual(await f.models.list("alice"), []);
+  await assert.rejects(
+    f.form.write({ modelLoopProtection: "false", presets: [] }),
+    /AI_INVALID_SETTINGS/
+  );
 });
 
 test("personal model CRUD is account-bound, persists across reloads and keeps secrets off read APIs", async () => {

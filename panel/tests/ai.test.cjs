@@ -67,7 +67,8 @@ function fixture({
   storageData = new Map(),
   mirrorResponse,
   modResponse,
-  permissionMode = "full"
+  permissionMode = "full",
+  modelLoopProtection = true
 } = {}) {
   const modCalls = [];
   const network = async (config) => {
@@ -228,7 +229,10 @@ function fixture({
     tools: (user = "alice") => new PanelTools(ctx, request(undefined, user)),
     chat: new ChatService(
       ctx,
-      { resolve: async (_user, selectionId) => ({ ...config, selectionId, publicOnly: false }) },
+      {
+        resolve: async (_user, selectionId) => ({ ...config, selectionId, publicOnly: false }),
+        modelLoopProtectionEnabled: () => modelLoopProtection
+      },
       completion || (async () => answer())
     ),
     remote: (handler) => {
@@ -760,13 +764,69 @@ test("duplicate call IDs fail without imposing a cumulative tool limit", async (
   assert.ok(receipts.slice(1).every((message) => message.content.includes("AI_INVALID_TOOL")));
 });
 
-test("mixed tools can finish after more than 8 model rounds and 16 total operations", async () => {
+test("repeated tool results stop a model loop without using a cumulative call limit", async () => {
+  let rounds = 0;
+  const f = fixture({
+    completion: async () =>
+      call("get_instance", own, `loop-${++rounds}`)
+  });
+  const result = await f.chat.chat(f.request());
+  assert.equal(rounds, 6);
+  assert.equal(f.calls.length, 6);
+  assert.equal(result.messages.at(-1).content, "AI_MODEL_LOOP_DETECTED");
+  assert.equal(result.messages.at(-1).role, "error");
+  assert.ok(
+    result.messages
+      .filter((message) => message.role === "tool")
+      .every((message) => message.ok && !message.pending)
+  );
+});
+
+test("alternating tool workflows are detected as a repeating cycle", async () => {
   let rounds = 0;
   const f = fixture({
     completion: async () => {
+      rounds++;
+      return rounds % 2
+        ? call("get_instance", own, `cycle-${rounds}`)
+        : call("list_instances", {}, `cycle-${rounds}`);
+    }
+  });
+  const result = await f.chat.chat(f.request());
+  assert.equal(rounds, 12);
+  assert.equal(f.calls.length, 12);
+  assert.equal(result.messages.at(-1).content, "AI_MODEL_LOOP_DETECTED");
+  assert.equal(result.messages.at(-1).role, "error");
+});
+
+test("model loop protection can be disabled", async () => {
+  let rounds = 0;
+  const f = fixture({
+    modelLoopProtection: false,
+    completion: async () => {
+      if (++rounds > 10) return answer();
+      return call("get_instance", own, `loop-${rounds}`);
+    }
+  });
+  const result = await f.chat.chat(f.request());
+  assert.equal(rounds, 11);
+  assert.equal(f.calls.length, 10);
+  assert.equal(result.messages.at(-1).content, "Done");
+  assert.ok(!result.messages.some((message) => message.role === "error"));
+});
+
+test("mixed tools can finish after more than 8 model rounds and 16 total operations", async () => {
+  let rounds = 0;
+  const f = fixture({
+    admin: true,
+    completion: async () => {
       if (++rounds > 38) return answer();
       return rounds % 2
-        ? call("list_instances", {}, `call-${rounds}`)
+        ? call(
+            "list_instances",
+            { daemonId: own.daemonId, page: (rounds + 1) / 2 },
+            `call-${rounds}`
+          )
         : call("get_instance", own, `call-${rounds}`);
     }
   });
@@ -784,15 +844,20 @@ test("mixed tools can finish after more than 8 model rounds and 16 total operati
 test("the same read tool can run more than one hundred times in one turn", async () => {
   let rounds = 0;
   const f = fixture({
+    admin: true,
     completion: async () => {
       if (++rounds > 105) return answer();
-      return call("get_instance", own, `call-${rounds}`);
+      return call(
+        "list_instances",
+        { daemonId: own.daemonId, page: rounds },
+        `call-${rounds}`
+      );
     }
   });
   const result = await f.chat.chat(f.request());
   assert.equal(rounds, 106);
   assert.equal(f.calls.length, 105);
-  assert.ok(f.calls.every((entry) => entry.event === "instance/detail"));
+  assert.ok(f.calls.every((entry) => entry.event === "instance/select"));
   const receipts = result.messages.filter((message) => message.role === "tool");
   assert.equal(receipts.length, 105);
   assert.ok(receipts.every((message) => message.ok && !message.pending));

@@ -49,6 +49,9 @@ const DOWNLOAD_BACKGROUND_OVERRIDE =
 const DOWNLOAD_TOOL_CONTRACT =
   "All download and installation progress uses one tool: wait_download_task. Its taskType is java for Java runtime tasks (taskId is the returned runtime id), mod for mod/plugin downloads, msl_download for MSL artifact downloads, and msl_install for MSL instance installation. Supply the exact daemonId and identifiers returned by the start tool. Java catalog listing and Java installation both use the MSL mirror source; describe them as MSL mirror operations. Do not call legacy status-tool names.";
 
+const MODEL_LOOP_REPETITIONS = 6;
+const MODEL_LOOP_MAX_PERIOD = 4;
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -58,6 +61,25 @@ function canonical(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function modelLoopDetected(signatures: readonly string[]): boolean {
+  for (
+    let period = 1;
+    period <= Math.min(MODEL_LOOP_MAX_PERIOD, Math.floor(signatures.length / MODEL_LOOP_REPETITIONS));
+    period++
+  ) {
+    const start = signatures.length - period * MODEL_LOOP_REPETITIONS;
+    let repeated = true;
+    for (let index = start + period; index < signatures.length; index++) {
+      if (signatures[index] !== signatures[start + ((index - start) % period)]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) return true;
+  }
+  return false;
 }
 
 type ObjectValue = Record<string, any>;
@@ -222,7 +244,7 @@ export class ChatService {
 
   constructor(
     private ctx: PanelPluginContext,
-    private models: Pick<ModelStore, "resolve">,
+    private models: Pick<ModelStore, "resolve" | "modelLoopProtectionEnabled">,
     private completion = complete
   ) {
     this.history = new HistoryStore(ctx);
@@ -695,6 +717,8 @@ export class ChatService {
     const visible: ChatMessage[] = [{ role: "user", content: body.message.trim() }];
     const seen = new Set<string>();
     const mutations = new Set<string>();
+    const loopProtectionEnabled = this.models.modelLoopProtectionEnabled();
+    const loopSignatures: string[] = [];
     const publish = async (event: ChatEvent) => {
       try {
         await onEvent(event);
@@ -880,6 +904,7 @@ export class ChatService {
           }
           break;
         }
+        const roundTrace: string[] = [];
         for (const call of message.tool_calls) {
           const requested = await requestTool(call.id, call.function.name);
           let result: unknown;
@@ -1041,6 +1066,14 @@ export class ChatService {
             if (batchId) await publish({ type: "download", action: "remove", id: batchId });
           }
           const content = JSON.stringify(result ?? null);
+          roundTrace.push(
+            JSON.stringify([
+              call.function.name,
+              args === undefined ? call.function.arguments : canonical(args),
+              ok,
+              content
+            ])
+          );
           turn.push({ role: "tool", tool_call_id: call.id, content });
           Object.assign(requested.message, {
             pending: false,
@@ -1053,6 +1086,21 @@ export class ChatService {
             index: requested.index,
             message: { ...requested.message }
           });
+        }
+        if (loopProtectionEnabled) {
+          loopSignatures.push(
+            createHash("sha256").update(roundTrace.join("\n")).digest("hex")
+          );
+          loopSignatures.splice(
+            0,
+            Math.max(0, loopSignatures.length - MODEL_LOOP_REPETITIONS * MODEL_LOOP_MAX_PERIOD)
+          );
+          if (modelLoopDetected(loopSignatures)) {
+            const content = t("AI_MODEL_LOOP_DETECTED");
+            turn.push({ role: "assistant", content });
+            await append({ role: "error", content });
+            break;
+          }
         }
       }
     } catch (error) {
