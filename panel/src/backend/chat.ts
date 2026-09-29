@@ -113,9 +113,10 @@ function finite(value: unknown): number | undefined {
 }
 
 function statusProgress(tool: string, status: ObjectValue): ToolProgress {
-  if (tool === "wait_download_task" && status.taskType === "java")
+  if (tool === "wait_download_task" && ["java", "docker"].includes(status.taskType))
     return {
-      value: status.state === "completed" ? 100 : finite(status.progress)
+      value: status.state === "completed" ? 100 : finite(status.progress),
+      ...(status.taskType === "docker" ? { downloadedBytes: finite(status.downloadedBytes), totalBytes: finite(status.totalBytes) } : {})
     };
   if (tool === "wait_download_task" && status.taskType === "msl_install") {
     const progress = status.downloadProgress || {};

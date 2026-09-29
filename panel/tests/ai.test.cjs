@@ -2742,7 +2742,8 @@ test("Docker pulls use the panel builder and wait for its verified image", async
     }
     if (event === "environment/progress") {
       polls++;
-      return polls === 1 ? {} : { [taskId]: polls === 2 ? 1 : 2 };
+      assert.deepEqual(args, { details: true });
+      return polls === 1 ? {} : { [taskId]: { status: polls === 2 ? 1 : 2, percentage: polls === 2 ? 42 : 100, downloadedBytes: 42, totalBytes: 100 } };
     }
     assert.equal(event, "environment/images");
     return [{ RepoTags: [taskId] }];
@@ -2771,6 +2772,8 @@ test("Docker pulls use the panel builder and wait for its verified image", async
   assert.equal(result.state, "completed");
   assert.equal(polls, 3);
   assert.equal(progress.at(-1).value, 100);
+  assert.equal(progress[1].value, 42);
+  assert.equal(progress[1].downloadedBytes, 42);
   f.remote(async () => ({ [taskId]: -1 }));
   assert.equal((await f.tools().execute("wait_download_task", args)).state, "failed");
   f.remote(async (event) => (event === "environment/progress" ? { [taskId]: 2 } : []));
@@ -2876,7 +2879,7 @@ test("Docker pull participates in chat background task tracking", async (t) => {
       taskId = `${args.name}:${args.tag}`;
       return true;
     }
-    if (event === "environment/progress") return { [taskId]: 2 };
+    if (event === "environment/progress") return { [taskId]: { status: 1, percentage: 37, downloadedBytes: 37, totalBytes: 100 } };
     if (event === "environment/images") return [{ RepoTags: [taskId] }];
     assert.fail(event);
   });
@@ -2890,4 +2893,5 @@ test("Docker pull participates in chat background task tracking", async (t) => {
     )
   );
   assert.ok(f.calls.some((call) => call.event === "environment/progress"));
+  assert.ok(events.some((event) => event.type === "download" && event.task?.progress?.value === 37));
 });

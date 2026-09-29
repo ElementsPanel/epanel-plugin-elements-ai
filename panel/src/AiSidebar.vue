@@ -817,7 +817,7 @@ onBeforeUnmount(() => reset(true));
                         />
                         <span>{{ toolLabelFor(task.tool) }}</span>
                       </span>
-                      <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
+                      <span class="ai-download-detail">{{ progressText(task.progress) || (task.tool === "pull_docker_image" ? "…" : "0%") }}</span>
                     </span>
                   </span>
                 </span>
@@ -837,10 +837,11 @@ onBeforeUnmount(() => reset(true));
                         />
                         <span>{{ toolLabelFor(task.tool) }}</span>
                       </span>
-                      <span class="ai-download-detail">{{ progressText(task.progress) || "0%" }}</span>
+                      <span class="ai-download-detail">{{ progressText(task.progress) || (task.tool === "pull_docker_image" ? "…" : "0%") }}</span>
                     </div>
                     <VProgressLinear
                       :model-value="progressValue(task.progress) ?? 0"
+                      :indeterminate="task.tool === 'pull_docker_image' && task.state === 'running' && task.progress?.value === undefined"
                       color="primary"
                       height="5"
                       rounded

@@ -1527,13 +1527,16 @@ export class PanelTools {
       };
       do {
         check();
-        const progress = await this.remote(daemonId).request("environment/progress", {});
+        const progress = await this.remote(daemonId).request("environment/progress", { details: true });
         check();
         if (!progress || typeof progress !== "object" || Array.isArray(progress))
           this.fail("AI_OPERATION_FAILED");
-        const code = Object.prototype.hasOwnProperty.call(progress, taskId)
-          ? progress[taskId]
-          : undefined;
+        const entry = Object.prototype.hasOwnProperty.call(progress, taskId) ? progress[taskId] : undefined;
+        const detail = entry && typeof entry === "object" && !Array.isArray(entry) ? entry : undefined;
+        const code = detail ? detail.status : entry;
+        const percentage = detail && typeof detail.percentage === "number" && Number.isFinite(detail.percentage)
+          ? Math.max(0, Math.min(99, detail.percentage)) : undefined;
+        const bytes = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
         if (code !== undefined && ![1, 2, -1].includes(code)) this.fail("AI_OPERATION_FAILED");
         const state =
           code === 1 ? "running" : code === 2 ? "completed" : code === -1 ? "failed" : "unknown";
@@ -1557,9 +1560,15 @@ export class PanelTools {
           taskId,
           image: taskId,
           state,
-          ...(state === "failed" ? { error: this.ctx.i18n.$t("AI_OPERATION_FAILED") } : {})
+          progress: state === "completed" ? 100 : percentage,
+          downloadedBytes: bytes(detail?.downloadedBytes),
+          totalBytes: bytes(detail?.totalBytes),
+          ...(state === "failed" ? { error: typeof detail?.error === "string" ? detail.error.slice(0, 2000) : this.ctx.i18n.$t("AI_OPERATION_FAILED") } : {})
         };
-        await this.reportProgress(onProgress, { value: state === "completed" ? 100 : undefined });
+        await this.reportProgress(onProgress, {
+          value: state === "completed" ? 100 : percentage,
+          downloadedBytes: bytes(detail?.downloadedBytes), totalBytes: bytes(detail?.totalBytes)
+        });
         if (["completed", "failed"].includes(state) || !waitForDownloads) break;
         if (Date.now() >= deadline) this.fail("AI_OPERATION_FAILED");
         await this.wait(1000);

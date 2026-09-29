@@ -1843,3 +1843,28 @@ test("logout cancels history reads and late results never appear for the next ac
   assert.doesNotMatch(f.wrapper.text(), /PRIVATE HISTORY/);
   f.wrapper.unmount();
 });
+
+test("Docker download card displays live percentages above the composer", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({ sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+    emit = onEvent;
+    await pending.promise;
+  } });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Pull Docker image");
+  await f.wrapper.get("form").trigger("submit");
+  const update = async (progress) => {
+    emit({ type: "download", action: "upsert", task: { id: "docker:test", tool: "pull_docker_image", state: "running", progress } });
+    await vue.nextTick();
+  };
+  await update({});
+  assert.equal(f.wrapper.get(".ai-download-detail").text(), "…");
+  await update({ value: 37, downloadedBytes: 37, totalBytes: 100 });
+  assert.equal(f.wrapper.get(".ai-download-detail").text(), "37% · 37 B / 100 B");
+  await update({ value: 68, downloadedBytes: 68, totalBytes: 100 });
+  assert.match(f.wrapper.get(".ai-download-detail").text(), /^68%/);
+  assert.ok(f.wrapper.html().indexOf('class="ai-downloads') < f.wrapper.html().indexOf('class="ai-composer"'));
+});
