@@ -37,7 +37,7 @@ import { defaultPreferences, type ChatPreferences } from "./preferences";
 import { CLIENT_CHAT_TIMEOUT_MS } from "./timing";
 
 const props = defineProps<{ state: { open: boolean } }>();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const status = ref<AiStatus>();
@@ -106,6 +106,8 @@ const list = ref<HTMLElement>();
 const input = ref<InstanceType<typeof VTextarea>>();
 const AUTO_SCROLL_THRESHOLD = 48;
 let autoScrollEnabled = true;
+let scrollFrame: number | undefined;
+let forceScroll = false;
 let controller: AbortController | undefined;
 let statusController: AbortController | undefined;
 let generation = 0;
@@ -230,6 +232,7 @@ function clearDownloads() {
 
 function reset(shouldClearDownloads = false) {
   generation++;
+  cancelScroll();
   controller?.abort();
   statusController?.abort();
   messages.value = [];
@@ -296,17 +299,28 @@ function listScrolled() {
     element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_THRESHOLD;
 }
 
-async function scroll(force = false) {
-  if (!force && !autoScrollEnabled) return;
-  await nextTick();
-  if (!force && !autoScrollEnabled) return;
-  const element = list.value;
-  if (!element) return;
-  element.scrollTo({
-    top: element.scrollHeight,
-    behavior: force ? "smooth" : "auto"
+function cancelScroll() {
+  if (scrollFrame !== undefined) window.cancelAnimationFrame(scrollFrame);
+  scrollFrame = undefined;
+  forceScroll = false;
+}
+
+function scroll(force = false) {
+  if (!props.state.open || (!force && !autoScrollEnabled)) return;
+  forceScroll ||= force;
+  if (scrollFrame !== undefined) return;
+  // SSE events can arrive faster than the browser paints. Measure and scroll
+  // once per frame, after Vue has patched the latest message content.
+  scrollFrame = window.requestAnimationFrame(() => {
+    scrollFrame = undefined;
+    const forced = forceScroll;
+    forceScroll = false;
+    if (!props.state.open || (!forced && !autoScrollEnabled)) return;
+    const element = list.value;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
+    autoScrollEnabled = true;
   });
-  autoScrollEnabled = true;
 }
 
 async function refreshStatus() {
@@ -541,6 +555,8 @@ watch(
       await refreshStatus();
       void scroll(true);
       void nextTick(() => input.value?.focus());
+    } else {
+      cancelScroll();
     }
   }
 );
@@ -653,9 +669,27 @@ onBeforeUnmount(() => reset(true));
             <h2>{{ t("AI_WELCOME_TITLE") }}</h2>
             <p>{{ t("AI_WELCOME") }}</p>
           </div>
+          <!-- Message events replace the object; deltas and final cleanup mutate
+               the fields below. Include interaction state and locale in the cache. -->
           <article
             v-for="(message, index) in messages"
             :key="index"
+            v-memo="[
+              message,
+              message.content,
+              message.reasoning,
+              message.reasoningComplete,
+              message.workComplete,
+              message.pending,
+              message.ok,
+              message.approval,
+              message.question,
+              locale,
+              message.pending && loading,
+              message.approval && approvalSubmitting,
+              message.question && questionSubmitting,
+              message.question && questionAnswers[message.question.id]
+            ]"
             class="ai-message"
             :class="`ai-message--${message.role}`"
           >
@@ -1194,6 +1228,9 @@ onBeforeUnmount(() => reset(true));
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 .ai-message {
+  /* Keep history searchable while skipping offscreen layout and painting. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
   margin-bottom: 24px;
 }
 .ai-message--tool {

@@ -21,6 +21,18 @@ for (const key of [
 ])
   global[key] = dom.window[key];
 dom.window.HTMLElement.prototype.scrollTo = function () {};
+const frames = new Map();
+let frameId = 0;
+dom.window.requestAnimationFrame = (callback) => {
+  frames.set(++frameId, callback);
+  return frameId;
+};
+dom.window.cancelAnimationFrame = (id) => frames.delete(id);
+function paint() {
+  const callbacks = [...frames.values()];
+  frames.clear();
+  for (const callback of callbacks) callback(0);
+}
 const vue = frontendRequire("vue");
 const { mount, flushPromises } = frontendRequire("@vue/test-utils");
 const { parse, compileScript } = frontendRequire("@vue/compiler-sfc");
@@ -69,6 +81,7 @@ function sidebar(api = {}) {
   const route = vue.reactive({ path: "/instances" });
   const navigations = [];
   const calls = [];
+  const translations = [];
   const { h, defineComponent } = vue;
   const block = defineComponent({
     setup:
@@ -197,7 +210,7 @@ function sidebar(api = {}) {
         useRoute: () => route,
         useRouter: () => ({ push: (value) => navigations.push(value) })
       },
-      "vue-i18n": { useI18n: () => ({ t: (key) => key, locale: vue.ref("en-US") }) },
+      "vue-i18n": { useI18n: () => ({ t: (key) => { translations.push(key); return key; }, locale: vue.ref("en-US") }) },
       "vuetify/components": components,
       "./api": {
         AccountChangedError,
@@ -232,6 +245,7 @@ function sidebar(api = {}) {
     route,
     navigations,
     calls,
+    translations,
     components,
     AccountChangedError
   };
@@ -1130,6 +1144,7 @@ test("personal settings only control sending and preserve the model selected in 
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0][2], "personal:mine");
   assert.equal(f.wrapper.get(".ai-message--user strong").text(), "Formatted text");
+  paint();
   assert.ok(scrolls > 0);
   const emit = f.calls[0][5];
   emit({
@@ -1182,6 +1197,7 @@ test("streaming follows the conversation only while the user remains near the bo
   await f.wrapper.get("textarea").setValue("Stream a reply");
   await f.wrapper.get("form").trigger("submit");
   await vue.nextTick();
+  paint();
   scrolls = 0;
 
   element.scrollTop = 200;
@@ -1189,12 +1205,14 @@ test("streaming follows the conversation only while the user remains near the bo
   emit({ type: "message", index: 1, message: { role: "assistant", content: "" } });
   emit({ type: "delta", index: 1, content: "First fragment" });
   await vue.nextTick();
+  paint();
   assert.equal(scrolls, 0);
 
   element.scrollTop = 800;
   await messages.trigger("scroll");
   emit({ type: "delta", index: 1, content: " and second" });
   await vue.nextTick();
+  paint();
   assert.ok(scrolls > 0);
 });
 
@@ -1867,4 +1885,47 @@ test("Docker download card displays live percentages above the composer", async 
   await update({ value: 68, downloadedBytes: 68, totalBytes: 100 });
   assert.match(f.wrapper.get(".ai-download-detail").text(), /^68%/);
   assert.ok(f.wrapper.html().indexOf('class="ai-downloads') < f.wrapper.html().indexOf('class="ai-composer"'));
+});
+
+
+test("long conversations reuse unchanged rows and coalesce stream scrolling", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      emit = onEvent;
+      await pending.promise;
+    }
+  });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  paint();
+  await f.wrapper.get("textarea").setValue("Continue");
+  await f.wrapper.get("form").trigger("submit");
+  emit({ type: "start", conversationId: "a".repeat(32), messages:
+    Array.from({ length: 160 }, (_, index) => ({ role: "assistant", content: `History ${index}` }))
+  });
+  await vue.nextTick();
+  paint();
+  f.translations.length = 0;
+  let scrolls = 0;
+  f.wrapper.get(".ai-messages").element.scrollTo = () => scrolls++;
+  for (let i = 0; i < 20; i++) {
+    emit({ type: "delta", index: 159, content: " next" });
+    await vue.nextTick();
+  }
+  // Only the changing assistant row should evaluate its translated role label.
+  assert.equal(f.translations.filter((key) => key === "AI_TITLE").length, 20);
+  assert.equal(scrolls, 0);
+  paint();
+  assert.equal(scrolls, 1);
+  assert.equal(f.wrapper.findAll(".ai-message").length, 160);
+  assert.equal(f.wrapper.findAll(".ai-text").at(-1).text(), "History 159" + " next".repeat(20));
+  emit({ type: "delta", index: 159, content: " hidden" });
+  await vue.nextTick();
+  f.state.open = false;
+  await vue.nextTick();
+  paint();
+  assert.equal(scrolls, 1);
 });
