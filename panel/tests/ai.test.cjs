@@ -404,7 +404,7 @@ test("Java tools reuse the Java plugin and keep instance access scoped", async (
   );
 });
 
-test("Java installation discovery checks panel runtimes before the admin-only node terminal", async () => {
+test("Java installation discovery checks panel runtimes before the admin-only daemon command", async () => {
   const f = fixture({ admin: true });
   const definitions = f.load(source + "backend/tools.ts").toolDefinitions;
   const adminNames = definitions(true, true).map((tool) => tool.function.name);
@@ -414,8 +414,6 @@ test("Java installation discovery checks panel runtimes before the admin-only no
   assert.ok(adminNames.includes("ask_user"));
   assert.ok(userNames.includes("ask_user"));
 
-  const commands = [];
-  let outputReads = 0;
   f.remote(async (event, data) => {
     if (event === "java_manager/list")
       return [
@@ -423,18 +421,14 @@ test("Java installation discovery checks panel runtimes before the admin-only no
           info: { fullname: "msl_17", name: "msl", version: "17", downloading: false }
         }
       ];
-    if (event === "info/overview") return { system: { platform: "linux" } };
-    if (event === "instance/detail") return { instanceUuid: "global0001", status: 3 };
-    if (event === "instance/command") {
-      commands.push(data.command);
-      return true;
-    }
-    if (event === "instance/outputlog") {
-      if (outputReads++ === 0) return "old output\n";
-      const start = /(__ELEMENTS_AI_START_[a-f0-9]+__)/.exec(commands[0])?.[1];
-      const end = /(__ELEMENTS_AI_END_[a-f0-9]+__)/.exec(commands[2])?.[1];
-      return `old output\n${start}\nopenjdk version \"21.0.4\"\n${end}:0\n`;
-    }
+    if (event === "elements_ai/execute_command")
+      return {
+        platform: "linux",
+        exitCode: 0,
+        content: 'openjdk version "21.0.4"',
+        truncated: false,
+        timedOut: false
+      };
     throw new Error(`Unexpected event: ${event}`);
   });
 
@@ -450,8 +444,16 @@ test("Java installation discovery checks panel runtimes before the admin-only no
   assert.equal(result.exitCode, 0);
   assert.equal(result.content, 'openjdk version "21.0.4"');
   assert.equal(result.truncated, false);
-  assert.equal(commands.length, 3);
-  assert.equal(commands[1], "java -version");
+  assert.equal(result.timedOut, false);
+  assert.deepEqual(f.calls.at(-1), {
+    node: "node-a",
+    event: "elements_ai/execute_command",
+    data: { command: "java -version", timeoutSeconds: 15, maxChars: 16000 }
+  });
+  assert.deepEqual(
+    f.calls.map((entry) => entry.event),
+    ["java_manager/list", "elements_ai/execute_command"]
+  );
 
   const regular = fixture();
   await assert.rejects(

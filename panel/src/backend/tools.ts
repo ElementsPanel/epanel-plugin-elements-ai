@@ -14,7 +14,6 @@ const string = { type: "string", minLength: 1, maxLength: 200 };
 const target = { daemonId: string, instanceUuid: string };
 const filePath = { type: "string", minLength: 1, maxLength: 1024 };
 const MAX_TEXT_BYTES = 64 * 1024;
-const GLOBAL_INSTANCE_UUID = "global0001";
 const hashText = (content: string) => createHash("sha256").update(content).digest("hex");
 const eventProperties = {
   autoStart: { type: "boolean" },
@@ -205,7 +204,7 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
       ),
       definition(
         "execute_node_command",
-        "Execute one command in the selected node's system terminal and return only this command's bounded output and exit code. Administrator-only and sensitive. Prefer purpose-built tools; use this for read-only system inspection such as `java -version` before installing Java, or for an explicitly requested system command. One line only. A timeout stops waiting but may not terminate the command.",
+        "Execute one command directly through the Elements AI daemon plugin on the selected node and return only this command's bounded output and exit code. Administrator-only and sensitive. Prefer purpose-built tools; use this for read-only system inspection such as `java -version` before installing Java, or for an explicitly requested system command. One line only. A timeout terminates the command.",
         {
           daemonId: string,
           command: { type: "string", minLength: 1, maxLength: 4096 },
@@ -716,82 +715,33 @@ export class PanelTools {
       const current = this.identity();
       if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
     };
-    const remote = this.remote(daemonId);
-    const overview = await remote.request("info/overview");
+    const result = await this.remote(daemonId).request(
+      "elements_ai/execute_command",
+      { command, timeoutSeconds, maxChars },
+      timeoutSeconds * 1000 + 3000
+    );
     check();
-    const platform = overview?.system?.platform;
-    if (typeof platform !== "string" || !platform || platform.length > 32)
+    if (
+      !result ||
+      typeof result !== "object" ||
+      typeof result.platform !== "string" ||
+      !result.platform ||
+      result.platform.length > 32 ||
+      (result.exitCode !== null && !Number.isInteger(result.exitCode)) ||
+      typeof result.content !== "string" ||
+      result.content.length > maxChars ||
+      typeof result.truncated !== "boolean" ||
+      typeof result.timedOut !== "boolean"
+    )
       this.fail("AI_OPERATION_FAILED");
-
-    let detail = await remote.request("instance/detail", { instanceUuid: GLOBAL_INSTANCE_UUID });
-    check();
-    if (detail?.instanceUuid !== GLOBAL_INSTANCE_UUID) this.fail("AI_OPERATION_FAILED");
-    if (detail.status === 0) {
-      await remote.request("instance/open", { instanceUuids: [GLOBAL_INSTANCE_UUID] });
-      check();
-    }
-    const startDeadline = Date.now() + 10_000;
-    while (detail.status !== 3 && Date.now() < startDeadline) {
-      if (![0, 2, 3].includes(detail.status)) this.fail("AI_BUSY");
-      await this.wait(200);
-      detail = await remote.request("instance/detail", { instanceUuid: GLOBAL_INSTANCE_UUID });
-      check();
-    }
-    if (detail.status !== 3) this.fail("AI_OPERATION_FAILED");
-
-    let baseline = "";
-    try {
-      const output = await remote.request("instance/outputlog", {
-        instanceUuid: GLOBAL_INSTANCE_UUID
-      });
-      if (typeof output === "string") baseline = output;
-    } catch {}
-    check();
-
-    const nonce = randomBytes(12).toString("hex");
-    const startMarker = `__ELEMENTS_AI_START_${nonce}__`;
-    const endMarker = `__ELEMENTS_AI_END_${nonce}__`;
-    const windows = platform === "win32";
-    const startCommand = windows
-      ? `echo ${startMarker}`
-      : `printf '%s\\n' '${startMarker}'`;
-    const endCommand = windows
-      ? `echo ${endMarker}:%ERRORLEVEL%`
-      : `printf '%s:%s\\n' '${endMarker}' "$?"`;
-    for (const line of [startCommand, command, endCommand]) {
-      await remote.request("instance/command", {
-        instanceUuid: GLOBAL_INSTANCE_UUID,
-        command: line
-      });
-      check();
-    }
-
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    while (Date.now() < deadline) {
-      await this.wait(200);
-      const output = await remote.request("instance/outputlog", {
-        instanceUuid: GLOBAL_INSTANCE_UUID
-      });
-      check();
-      if (typeof output !== "string") this.fail("AI_OPERATION_FAILED");
-      const delta = output.startsWith(baseline) ? output.slice(baseline.length) : output;
-      const plain = terminalText(delta, 20000, 512000).content;
-      const lines = plain.split("\n");
-      const start = lines.findIndex((line) => line.trim() === startMarker);
-      if (start < 0) continue;
-      for (let index = start + 1; index < lines.length; index++) {
-        const match = new RegExp(`^${endMarker}:(-?\\d+)$`).exec(lines[index].trim());
-        if (!match) continue;
-        const result = terminalText(lines.slice(start + 1, index).join("\n"), 20000, maxChars);
-        return {
-          daemonId,
-          platform,
-          exitCode: Number(match[1]),
-          ...result
-        };
-      }
-    }
-    this.fail("AI_OPERATION_FAILED");
+    return {
+      daemonId,
+      platform: result.platform,
+      exitCode: result.exitCode,
+      content: result.content,
+      truncated: result.truncated,
+      timedOut: result.timedOut
+    };
   }
 
   private async deletionTool(name: string, args: JsonObject, identity: ReturnType<PanelTools["identity"]>) {

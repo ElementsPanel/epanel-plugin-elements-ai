@@ -1,0 +1,11 @@
+{
+  "id": "epanel-plugin-elements-ai",
+  "name": "Elements AI Daemon",
+  "displayName": "Elements AI",
+  "version": "0.1.1",
+  "description": "Runs administrator-approved Elements AI node commands directly on the daemon.",
+  "summary": "为 Elements AI 提供节点侧命令执行能力。",
+  "category": "tools",
+  "priority": 100,
+  "backend": "src/backend/index.ts"
+}
