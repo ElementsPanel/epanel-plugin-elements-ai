@@ -145,5 +145,6 @@
   "AI_DENY": "Reddet",
   "AI_APPROVAL_EXPIRED": "Bu onayın süresi doldu veya onay kullanılamıyor. Sohbetteki son durumu kontrol edin.",
   "AI_QUESTION_EXPIRED": "Bu sorunun süresi doldu veya soru kullanılamıyor. Sohbetteki son durumu kontrol edin.",
-  "AI_OPERATION_DENIED": "Kullanıcı bu işlemi reddetti. Hiçbir şey yürütülmedi. Yeniden denemeyin veya bu kararı aşmaya çalışmayın."
+  "AI_OPERATION_DENIED": "Kullanıcı bu işlemi reddetti. Hiçbir şey yürütülmedi. Yeniden denemeyin veya bu kararı aşmaya çalışmayın.",
+  "AI_MESSAGE_QUEUED": "Sonraki araç çağrısından önce gönderilecek"
 }

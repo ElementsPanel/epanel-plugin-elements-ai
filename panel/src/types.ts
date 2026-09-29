@@ -99,6 +99,7 @@ export interface ModelInput {
 }
 
 export type ChatEvent =
+  | { type: "input"; id: string; index: number; message: ChatMessage }
   | { type: "start"; conversationId: string; messages: ChatMessage[] }
   | { type: "message"; index: number; message: ChatMessage }
   | { type: "delta"; index: number; content: string }

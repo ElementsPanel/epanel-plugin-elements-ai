@@ -229,6 +229,17 @@ export class ChatService {
   private conversations = new Map<string, Conversation>();
   private downloads = new Map<string, DownloadRecord>();
   private active = new Map<string, AbortController>();
+  private liveSettings = new Map<string, {
+    conversationId: string;
+    scope: string;
+    body: { modelId: string; permissionMode?: PermissionMode };
+    revision: number;
+    update: number;
+    accepting: boolean;
+    pending: { id: string; content: string }[];
+    inputs: Set<string>;
+    interrupt?: () => void;
+  }>();
   private approvals = new Map<
     string,
     {
@@ -423,6 +434,75 @@ export class ChatService {
   private checkScope(tools: PanelTools, owner: string, scope: string) {
     if (this.authorize(tools).uuid !== owner || tools.scope() !== scope)
       throw new ToolError(this.ctx.i18n.$t("AI_FORBIDDEN"));
+  }
+
+  enqueueMessage(request: RequestContext) {
+    const tools = new PanelTools(this.ctx, request);
+    const identity = this.authorize(tools);
+    const value = request.request.body;
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((key) => !["conversationId", "id", "message"].includes(key)) ||
+      typeof value.conversationId !== "string" || !/^[a-f0-9]{32}$/.test(value.conversationId) ||
+      typeof value.id !== "string" || !/^[a-f0-9]{32}$/.test(value.id) ||
+      typeof value.message !== "string" || !value.message.trim() || value.message.length > 4000)
+      throw new ToolError(this.ctx.i18n.$t("AI_INVALID_MESSAGE"));
+    const live = this.liveSettings.get(identity.uuid);
+    const controller = this.active.get(identity.uuid);
+    if (!live || live.conversationId !== value.conversationId || !controller || controller.signal.aborted)
+      return false;
+    this.checkScope(tools, identity.uuid, live.scope);
+    if (live.inputs.has(value.id)) return true;
+    if (!live.accepting) return false;
+    if (live.pending.length >= 16 || live.inputs.size >= 128)
+      throw new ToolError(this.ctx.i18n.$t("AI_BUSY"));
+    live.inputs.add(value.id);
+    live.pending.push({ id: value.id, content: value.message.trim() });
+    // A user clarification also releases a tool waiting for user input. It must
+    // reach the next model call without approving the suspended operation.
+    for (const pending of this.approvals.values())
+      if (pending.owner === identity.uuid && pending.signal === controller.signal) pending.decide(false);
+    for (const pending of this.questions.values())
+      if (pending.owner === identity.uuid && pending.signal === controller.signal)
+        pending.fail(new ToolError(this.ctx.i18n.$t("AI_INTERRUPTED")));
+    return true;
+  }
+
+  async updateSettings(request: RequestContext) {
+    const tools = new PanelTools(this.ctx, request);
+    const identity = this.authorize(tools);
+    const value = request.request.body;
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((key) => !["conversationId", "modelId", "permissionMode", "refresh"].includes(key)) ||
+      typeof value.conversationId !== "string" || !/^[a-f0-9]{32}$/.test(value.conversationId) ||
+      typeof value.modelId !== "string" || !value.modelId || value.modelId.length > 80 ||
+      !["default", "full"].includes(value.permissionMode) ||
+      (value.refresh !== undefined && typeof value.refresh !== "boolean"))
+      throw new ToolError(this.ctx.i18n.$t("AI_INVALID_MESSAGE"));
+    const live = this.liveSettings.get(identity.uuid);
+    const controller = this.active.get(identity.uuid);
+    if (!live || !live.accepting || live.conversationId !== value.conversationId || !controller || controller.signal.aborted)
+      throw new ToolError(this.ctx.i18n.$t("AI_EXPIRED"));
+    this.checkScope(tools, identity.uuid, live.scope);
+    const update = ++live.update;
+    await this.models.resolve(identity.uuid, value.modelId, identity.elevated);
+    this.checkScope(tools, identity.uuid, live.scope);
+    if (this.liveSettings.get(identity.uuid) !== live || !live.accepting || controller.signal.aborted)
+      throw new ToolError(this.ctx.i18n.$t("AI_EXPIRED"));
+    if (update !== live.update) return false;
+    const changed = live.body.modelId !== value.modelId ||
+      live.body.permissionMode !== value.permissionMode || value.refresh;
+    live.body.modelId = value.modelId;
+    live.body.permissionMode = value.permissionMode;
+    if (changed) {
+      live.revision++;
+      live.interrupt?.();
+    }
+    if (value.permissionMode === "full") {
+      for (const pending of this.approvals.values())
+        if (pending.owner === identity.uuid && pending.scope === live.scope &&
+          pending.signal === controller.signal && !pending.signal.aborted) pending.decide(true);
+    }
+    return true;
   }
 
   respondToApproval(request: RequestContext, id: string, value: unknown) {
@@ -671,6 +751,7 @@ export class ChatService {
       clearTimeout(timeout);
       request.res?.removeListener("close", abort);
       this.active.delete(identity.uuid);
+      this.liveSettings.delete(identity.uuid);
     }
   }
 
@@ -726,7 +807,10 @@ export class ChatService {
     const visible: ChatMessage[] = [{ role: "user", content: body.message.trim() }];
     const seen = new Set<string>();
     const mutations = new Set<string>();
-    const loopProtectionEnabled = this.models.modelLoopProtectionEnabled();
+    const live = { conversationId, scope, body, revision: 0, update: 0,
+      accepting: true, pending: [] as { id: string; content: string }[], inputs: new Set<string>(),
+      interrupt: undefined as (() => void) | undefined };
+    this.liveSettings.set(identity.uuid, live);
     const loopSignatures: string[] = [];
     const publish = async (event: ChatEvent) => {
       try {
@@ -746,6 +830,16 @@ export class ChatService {
       await publish({ type: "message", index, message: { ...message } });
       return index;
     };
+    const consumeInputs = async () => {
+      if (live.pending.length) loopSignatures.length = 0;
+      for (const input of live.pending.splice(0)) {
+        const message: ChatMessage = { role: "user", content: input.content };
+        turn.push({ role: "user", content: input.content });
+        const index = conversation!.visible.length + visible.length;
+        visible.push(message);
+        await publish({ type: "input", id: input.id, index, message });
+      }
+    };
     try {
       await publish({
         type: "start",
@@ -759,6 +853,8 @@ export class ChatService {
             : { type: "download", action: "remove", id: record.activity.id }
         );
       while (true) {
+        this.checkScope(tools, identity.uuid, scope);
+        await consumeInputs();
         const current = this.authorize(tools);
         const currentInstance =
           body.currentInstance === undefined
@@ -768,7 +864,9 @@ export class ChatService {
         if (controller.signal.aborted || Date.now() >= deadline)
           throw new ToolError(t("AI_INTERRUPTED"));
         const history = ([] as ModelMessage[]).concat(...conversation.turns);
+        const revision = live.revision;
         const config = await this.models.resolve(identity.uuid, body.modelId, current.elevated);
+        if (revision !== live.revision) continue;
         this.authorize(tools);
         if (tools.scope() !== scope) throw new ToolError(t("AI_FORBIDDEN"));
         const target = modelTarget(config.endpoint, config.model);
@@ -812,83 +910,121 @@ export class ChatService {
             message: { ...assistant }
           });
         };
-        const message = await this.completion(
-          config,
-          [
-            {
-              role: "system",
-              content: `${SYSTEM_PROMPT}\n${DOWNLOAD_BACKGROUND_OVERRIDE}\n${DOWNLOAD_TOOL_CONTRACT}\n${BATCH_DOWNLOAD_PROMPT}${
-                completionNotices.length
-                  ? `\nDownload updates since the previous request:\n- ${completionNotices.join(
-                      "\n- "
-                    )}`
-                  : ""
-              }\nCurrent role: ${
-                current.elevated ? "administrator" : "regular user, own instances only"
-              }.\nOperation permission mode: ${
-                body.permissionMode === "full" ? "full" : "default"
-              }.\nCurrent instance context: ${JSON.stringify(currentInstance || null)}.`
-            },
-            ...history,
-            ...turn
-          ],
-          toolDefinitions(current.elevated, tools.filesAllowed()),
-          controller.signal,
-          deadline - Date.now(),
-          async (content) => {
-            this.authorize(tools);
-            if (tools.scope() !== scope) throw new ToolError(t("AI_FORBIDDEN"));
-            const currentAssistant = await ensureAssistant();
-            await completeReasoning();
-            currentAssistant.content += content;
-            await publish({ type: "delta", index: assistantIndex, content });
-          },
-          async (id, name) => {
-            this.checkScope(tools, identity.uuid, scope);
-            await completeReasoning();
-            await requestTool(id, name);
-          },
-          {
-            beforeAttempt: async () => this.checkScope(tools, identity.uuid, scope),
-            onReasoning: async (content) => {
-              this.checkScope(tools, identity.uuid, scope);
+        // Only restart model generation. Tool execution retains the task controller,
+        // so a model switch cannot replay or interrupt an already-started mutation.
+        const attempt = new AbortController();
+        const abortAttempt = () => attempt.abort();
+        controller.signal.addEventListener("abort", abortAttempt, { once: true });
+        if (controller.signal.aborted) attempt.abort();
+        live.interrupt = abortAttempt;
+        const checkAttempt = () => {
+          if (attempt.signal.aborted) throw new ToolError(t("AI_INTERRUPTED"));
+          this.checkScope(tools, identity.uuid, scope);
+        };
+        let message: ModelMessage;
+        try {
+          message = await this.completion(
+            config,
+            [
+              {
+                role: "system",
+                content: `${SYSTEM_PROMPT}\n${DOWNLOAD_BACKGROUND_OVERRIDE}\n${DOWNLOAD_TOOL_CONTRACT}\n${BATCH_DOWNLOAD_PROMPT}${
+                  completionNotices.length
+                    ? `\nDownload updates since the previous request:\n- ${completionNotices.join(
+                        "\n- "
+                      )}`
+                    : ""
+                }\nCurrent role: ${
+                  current.elevated ? "administrator" : "regular user, own instances only"
+                }.\nOperation permission mode: ${
+                  body.permissionMode === "full" ? "full" : "default"
+                }.\nCurrent instance context: ${JSON.stringify(currentInstance || null)}.`
+              },
+              ...history,
+              ...turn
+            ],
+            toolDefinitions(current.elevated, tools.filesAllowed()),
+            attempt.signal,
+            deadline - Date.now(),
+            async (content) => {
+              checkAttempt();
+              this.authorize(tools);
+              if (tools.scope() !== scope) throw new ToolError(t("AI_FORBIDDEN"));
               const currentAssistant = await ensureAssistant();
-              if (currentAssistant.reasoningComplete) currentAssistant.reasoning = "";
-              currentAssistant.reasoningComplete = false;
-              currentAssistant.reasoning = (
-                (currentAssistant.reasoning || "") + content
-              ).slice(-4000);
-              await publish({
-                type: "message",
-                index: assistantIndex,
-                message: { ...currentAssistant }
-              });
+              await completeReasoning();
+              currentAssistant.content += content;
+              await publish({ type: "delta", index: assistantIndex, content });
             },
-            onRetry: async (attempt, delayMs) => {
+            async (id, name) => {
+              checkAttempt();
               this.checkScope(tools, identity.uuid, scope);
-              // Replace only this failed generation's partial output. Completed
-              // actions from earlier generations remain visible and in context.
-              visible.splice(attemptStart);
-              assistant = undefined;
-              assistantIndex = -1;
-              requestedTools.clear();
-              await publish({
-                type: "start",
-                conversationId,
-                messages: [...conversation.visible, ...visible]
-              });
-              await publish({
-                type: "retry",
-                attempt,
-                maxAttempts: MODEL_RETRY_DELAYS_MS.length,
-                delayMs
-              });
+              await completeReasoning();
+              await requestTool(id, name);
+            },
+            {
+              beforeAttempt: async () => checkAttempt(),
+              onReasoning: async (content) => {
+                checkAttempt();
+                this.checkScope(tools, identity.uuid, scope);
+                const currentAssistant = await ensureAssistant();
+                if (currentAssistant.reasoningComplete) currentAssistant.reasoning = "";
+                currentAssistant.reasoningComplete = false;
+                currentAssistant.reasoning = (
+                  (currentAssistant.reasoning || "") + content
+                ).slice(-4000);
+                await publish({
+                  type: "message",
+                  index: assistantIndex,
+                  message: { ...currentAssistant }
+                });
+              },
+              onRetry: async (attempt, delayMs) => {
+                checkAttempt();
+                this.checkScope(tools, identity.uuid, scope);
+                // Replace only this failed generation's partial output. Completed
+                // actions from earlier generations remain visible and in context.
+                visible.splice(attemptStart);
+                assistant = undefined;
+                assistantIndex = -1;
+                requestedTools.clear();
+                await publish({
+                  type: "start",
+                  conversationId,
+                  messages: [...conversation.visible, ...visible]
+                });
+                await publish({
+                  type: "retry",
+                  attempt,
+                  maxAttempts: MODEL_RETRY_DELAYS_MS.length,
+                  delayMs
+                });
+              }
             }
+          );
+          checkAttempt();
+        } catch (error) {
+          if (revision !== live.revision && !controller.signal.aborted) {
+            visible.splice(attemptStart);
+            await publish({ type: "start", conversationId,
+              messages: [...conversation.visible, ...visible] });
+            continue;
           }
-        );
+          throw error;
+        } finally {
+          controller.signal.removeEventListener("abort", abortAttempt);
+          if (live.interrupt === abortAttempt) live.interrupt = undefined;
+        }
         this.authorize(tools);
         if (tools.scope() !== scope) throw new ToolError(t("AI_FORBIDDEN"));
         if (controller.signal.aborted) throw new ToolError(t("AI_INTERRUPTED"));
+        if (live.pending.length) {
+          // No tools from this generation have executed yet. Regenerate with the
+          // new user messages instead of executing calls based on stale intent.
+          visible.splice(attemptStart);
+          await publish({ type: "start", conversationId,
+            messages: [...conversation.visible, ...visible] });
+          continue;
+        }
         turn.push(message);
         if (message.content && !assistant) {
           assistant = { role: "assistant", content: message.content };
@@ -903,6 +1039,8 @@ export class ChatService {
         }
         await completeReasoning();
         if (!message.tool_calls?.length) {
+          if (live.pending.length) continue;
+          live.accepting = false;
           if (assistant) {
             assistant.workComplete = true;
             await publish({
@@ -923,8 +1061,17 @@ export class ChatService {
           let downloadId: string | undefined;
           let downloadTool: string | undefined;
           let batchId: string | undefined;
+          let mutationSignature: string | undefined;
+          const checkQueuedInput = () => {
+            if (!live.pending.length) return;
+            // This check runs before the sensitive operation starts. An operation
+            // cancelled by new instructions may be requested again by the model.
+            if (mutationSignature) mutations.delete(mutationSignature);
+            throw new ToolError(t("AI_INTERRUPTED"));
+          };
           try {
             this.authorize(tools);
+            if (live.pending.length) throw new ToolError(t("AI_INTERRUPTED"));
             if (controller.signal.aborted || Date.now() >= deadline)
               throw new ToolError(t("AI_INTERRUPTED"));
             if (seen.has(call.id)) throw new ToolError(t("AI_INVALID_TOOL"));
@@ -986,6 +1133,7 @@ export class ChatService {
                 // Also reject repetitions with a fresh call ID, including uncertain failures.
                 if (mutations.has(signature)) throw new ToolError(t("AI_OPERATION_FAILED"));
                 mutations.add(signature);
+                mutationSignature = signature;
               }
               result = await tools.execute(
                 call.function.name,
@@ -993,38 +1141,39 @@ export class ChatService {
                 (value) => {
                   diff = value;
                 },
-                body.permissionMode === "full"
-                  ? undefined
-                  : async () => {
-                      this.checkScope(tools, identity.uuid, scope);
-                      try {
-                        const approved = await this.waitForApproval(
-                          identity.uuid,
-                          scope,
-                          controller.signal,
-                          async (id) => {
-                            requested.message.approval = {
-                              id,
-                              arguments: JSON.stringify(args, null, 2)
-                            };
-                            await publish({
-                              type: "message",
-                              index: requested.index,
-                              message: { ...requested.message }
-                            });
-                          }
-                        );
-                        this.checkScope(tools, identity.uuid, scope);
-                        if (!approved) throw new ToolError(t("AI_OPERATION_DENIED"));
-                      } finally {
-                        delete requested.message.approval;
+                async () => {
+                  this.checkScope(tools, identity.uuid, scope);
+                  checkQueuedInput();
+                  if (body.permissionMode === "full") return;
+                  try {
+                    const approved = await this.waitForApproval(
+                      identity.uuid,
+                      scope,
+                      controller.signal,
+                      async (id) => {
+                        requested.message.approval = {
+                          id,
+                          arguments: JSON.stringify(args, null, 2)
+                        };
                         await publish({
                           type: "message",
                           index: requested.index,
                           message: { ...requested.message }
                         });
                       }
-                    },
+                    );
+                    this.checkScope(tools, identity.uuid, scope);
+                    checkQueuedInput();
+                    if (!approved) throw new ToolError(t("AI_OPERATION_DENIED"));
+                  } finally {
+                    delete requested.message.approval;
+                    await publish({
+                      type: "message",
+                      index: requested.index,
+                      message: { ...requested.message }
+                    });
+                  }
+                },
                 {
                   waitForDownloads: true,
                   onProgress: async (progress) => {
@@ -1098,7 +1247,8 @@ export class ChatService {
             message: { ...requested.message }
           });
         }
-        if (loopProtectionEnabled) {
+        if (live.pending.length) continue;
+        if (this.models.modelLoopProtectionEnabled()) {
           loopSignatures.push(
             createHash("sha256").update(roundTrace.join("\n")).digest("hex")
           );
@@ -1115,6 +1265,8 @@ export class ChatService {
         }
       }
     } catch (error) {
+      live.accepting = false;
+      await consumeInputs();
       const content =
         error instanceof ToolError || error instanceof ModelSettingsError
           ? error.message
@@ -1134,6 +1286,8 @@ export class ChatService {
       await append({ role: "error", content });
       turn.push({ role: "assistant", content });
     }
+    live.accepting = false;
+    await consumeInputs();
     conversation.turns.push(turn);
     conversation.visible.push(...visible);
     conversation.touched = Date.now();

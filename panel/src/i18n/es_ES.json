@@ -145,5 +145,6 @@
   "AI_DENY": "Rechazar",
   "AI_APPROVAL_EXPIRED": "Esta aprobación ha caducado o no está disponible. Revisa el estado más reciente del chat.",
   "AI_QUESTION_EXPIRED": "Esta pregunta ha caducado o no está disponible. Revisa el estado más reciente del chat.",
-  "AI_OPERATION_DENIED": "El usuario rechazó esta operación. No se ejecutó nada. No reintentes ni eludas esta decisión."
+  "AI_OPERATION_DENIED": "El usuario rechazó esta operación. No se ejecutó nada. No reintentes ni eludas esta decisión.",
+  "AI_MESSAGE_QUEUED": "En cola para la próxima llamada a una herramienta"
 }

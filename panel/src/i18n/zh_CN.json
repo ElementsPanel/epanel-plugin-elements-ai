@@ -145,5 +145,6 @@
   "AI_DENY": "拒绝",
   "AI_APPROVAL_EXPIRED": "此操作确认已失效或不可用，请检查聊天中的最新状态。",
   "AI_QUESTION_EXPIRED": "此问题已失效或不可用，请检查聊天中的最新状态。",
-  "AI_OPERATION_DENIED": "用户拒绝了此操作，未执行。请勿重试或绕过此决定。"
+  "AI_OPERATION_DENIED": "用户拒绝了此操作，未执行。请勿重试或绕过此决定。",
+  "AI_MESSAGE_QUEUED": "已排队，将在下一次工具调用前发送"
 }

@@ -1552,6 +1552,8 @@ test("HTTP routes enforce authentication and disappear when the guard plugin unl
   assert.equal((await request("guest")).status, 403);
   assert.equal((await request("guest", "POST", "/api/ai/chat")).status, 403);
   assert.equal((await request("guest", "POST", "/api/ai/approvals/one")).status, 403);
+  assert.equal((await request("guest", "POST", "/api/ai/chat/input")).status, 403);
+  assert.equal((await request("guest", "PUT", "/api/ai/chat/settings")).status, 403);
   assert.equal((await request("guest", "POST", "/api/ai/questions/one")).status, 403);
   assert.equal((await request("guest", "PUT", "/api/ai/models")).status, 403);
   assert.equal((await request("guest", "PUT", "/api/ai/preferences")).status, 403);
@@ -2932,4 +2934,198 @@ test("failed creates and revoked permissions never publish file previews", async
     }, () => { published = true; }));
     assert.equal(published, false);
   }
+});
+
+test("live model changes restart only generation and preserve completed operations", async () => {
+  const generating = deferred();
+  let round = 0;
+  let oldSignal;
+  const selections = [];
+  const f = fixture({ completion: async (config, history, _tools, signal, _timeout, onDelta) => {
+    selections.push(config.selectionId);
+    if (round++ === 0) return call("control_instance", { ...own, action: "start" });
+    if (round === 2) {
+      oldSignal = signal;
+      await onDelta("Obsolete partial reply");
+      generating.resolve();
+      await new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("switched")), { once: true }));
+    }
+    assert.ok(history.some((message) => message.role === "tool"));
+    return answer("New model reply");
+  } });
+  let conversationId;
+  const result = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+  });
+  await generating.promise;
+  await f.chat.updateSettings(f.request({ conversationId, modelId: "preset:other", permissionMode: "full" }));
+  assert.equal(oldSignal.aborted, true);
+  const response = await result;
+  assert.deepEqual(selections, ["preset:default", "preset:default", "preset:other"]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(response.messages.at(-1).content, "New model reply");
+  assert.ok(!response.messages.some((message) => message.content.includes("Obsolete")));
+});
+
+test("switching to full permission releases the current approval without a second request", async () => {
+  const waiting = deferred();
+  let round = 0;
+  let conversationId;
+  const f = fileFixture({ permissionMode: "default", completion: async () =>
+    round++ ? answer() : call("create_file", { ...own, path: "live.txt", content: "Hello" }) });
+  const response = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+    if (event.type === "message" && event.message.approval) waiting.resolve();
+  });
+  await waiting.promise;
+  assert.equal(f.calls.length, 0);
+  await f.chat.updateSettings(f.request({ conversationId, modelId: "preset:default", permissionMode: "full" }));
+  await response;
+  assert.equal(f.calls.length, 1);
+});
+
+test("queued input waits for the tool boundary and replaces unexecuted stale calls", async () => {
+  const generating = deferred();
+  const finish = deferred();
+  let round = 0;
+  let conversationId;
+  const f = fixture({ completion: async (_config, history) => {
+    if (round++ === 0) {
+      generating.resolve();
+      await finish.promise;
+      return call("control_instance", { ...own, action: "stop" });
+    }
+    assert.equal(history.at(-1).role, "user");
+    assert.equal(history.at(-1).content, "Do not stop; just explain");
+    return answer("Explanation");
+  } });
+  const response = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+  });
+  await generating.promise;
+  const input = { conversationId, id: "a".repeat(32), message: "Do not stop; just explain" };
+  // Use an exact input payload rather than the fixture's default chat-only fields.
+  const request = f.request();
+  request.request.body = input;
+  assert.equal(f.chat.enqueueMessage(request), true);
+  assert.equal(f.chat.enqueueMessage(request), true);
+  assert.equal(round, 1);
+  finish.resolve();
+  const result = await response;
+  assert.equal(f.calls.length, 0);
+  assert.equal(result.messages.filter((message) => message.content === input.message).length, 1);
+  const saved = await f.chat.readHistory(f.request(), result.conversationId);
+  assert.ok(saved.messages.some((message) => message.content === input.message));
+  assert.equal(f.chat.enqueueMessage(request), false);
+});
+
+test("input during a tool preserves its result, skips later calls and resumes with the new message", async () => {
+  const executing = deferred();
+  const finish = deferred();
+  let round = 0;
+  let conversationId;
+  const f = fixture({ completion: async (_config, history) => {
+    if (round++ === 0) return {
+      ...call("control_instance", { ...own, action: "start" }, "first"),
+      tool_calls: [
+        ...call("control_instance", { ...own, action: "start" }, "first").tool_calls,
+        ...call("control_instance", { ...own, action: "stop" }, "second").tool_calls
+      ]
+    };
+    assert.equal(history.at(-1).content, "Keep the instance running");
+    assert.deepEqual(history.filter((message) => message.role === "tool").map((message) => message.tool_call_id), ["first", "second"]);
+    return answer();
+  } });
+  f.remote(async () => { executing.resolve(); await finish.promise; return true; });
+  const response = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+  });
+  await executing.promise;
+  const request = f.request();
+  request.request.body = { conversationId, id: "b".repeat(32), message: "Keep the instance running" };
+  assert.equal(f.chat.enqueueMessage(request), true);
+  finish.resolve();
+  const result = await response;
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(result.messages.filter((message) => message.role === "tool").map((message) => message.ok), [true, false]);
+});
+
+test("active updates and queued input reject other users, stale conversations and invalid bodies", async () => {
+  const generating = deferred();
+  const finish = deferred();
+  let conversationId;
+  const f = fixture({ completion: async () => { generating.resolve(); await finish.promise; return answer(); } });
+  const response = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+  });
+  await generating.promise;
+  try {
+    const request = f.request(undefined, "bob");
+    request.request.body = { conversationId, id: "c".repeat(32), message: "Wrong user" };
+    assert.equal(f.chat.enqueueMessage(request), false);
+    request.request.body = { conversationId, modelId: "preset:default", permissionMode: "full" };
+    await assert.rejects(f.chat.updateSettings(request), /AI_EXPIRED/);
+    request.user = "alice";
+    request.request.body.conversationId = "d".repeat(32);
+    await assert.rejects(f.chat.updateSettings(request), /AI_EXPIRED/);
+    request.request.body = { conversationId, id: "c".repeat(32), message: "x".repeat(4001) };
+    assert.throws(() => f.chat.enqueueMessage(request), /AI_INVALID_MESSAGE/);
+  } finally { finish.resolve(); await response; }
+});
+
+test("returning to default permission affects the next tool while the current operation completes", async () => {
+  const executing = deferred();
+  const finish = deferred();
+  const approval = deferred();
+  let round = 0;
+  let conversationId;
+  const f = fileFixture({ completion: async () => round++ ? answer() : {
+    ...call("create_file", { ...own, path: "first.txt", content: "first" }, "first"),
+    tool_calls: [
+      ...call("create_file", { ...own, path: "first.txt", content: "first" }, "first").tool_calls,
+      ...call("create_file", { ...own, path: "second.txt", content: "second" }, "second").tool_calls
+    ]
+  } });
+  f.remote(async () => { executing.resolve(); await finish.promise; return true; });
+  const result = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+    if (event.type === "message" && event.message.approval) approval.resolve(event.message.approval.id);
+  });
+  await executing.promise;
+  await f.chat.updateSettings(f.request({ conversationId, modelId: "preset:default", permissionMode: "default" }));
+  finish.resolve();
+  const id = await approval.promise;
+  assert.equal(f.calls.length, 1);
+  f.chat.respondToApproval(f.request(), id, { approved: false });
+  await result;
+  assert.equal(f.calls.length, 1);
+});
+
+test("queued clarification releases approval and the same unexecuted mutation can be proposed again", async () => {
+  const waiting = deferred();
+  let round = 0;
+  let conversationId;
+  let approvals = 0;
+  const f = fileFixture({ permissionMode: "default", completion: async (_config, history) => {
+    if (round++ < 2) {
+      if (round === 2) assert.equal(history.at(-1).content, "Yes, use that file name");
+      return call("create_file", { ...own, path: "new.txt", content: "Hello" }, `call-${round}`);
+    }
+    return answer();
+  } });
+  const result = f.chat.chat(f.request(), async (event) => {
+    if (event.type === "start") conversationId = event.conversationId;
+    if (event.type === "message" && event.message.approval) {
+      if (approvals++ === 0) waiting.resolve();
+      else f.chat.respondToApproval(f.request(), event.message.approval.id, { approved: true });
+    }
+  });
+  await waiting.promise;
+  const request = f.request();
+  request.request.body = { conversationId, id: "e".repeat(32), message: "Yes, use that file name" };
+  assert.equal(f.chat.enqueueMessage(request), true);
+  await result;
+  assert.equal(approvals, 2);
+  assert.equal(f.files.get("new.txt"), "Hello");
+  assert.equal(f.calls.filter((call) => call.event === "file/create-text").length, 1);
 });

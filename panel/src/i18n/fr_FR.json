@@ -145,5 +145,6 @@
   "AI_DENY": "Refuser",
   "AI_APPROVAL_EXPIRED": "Cette confirmation a expiré ou est indisponible. Consultez le dernier état du chat.",
   "AI_QUESTION_EXPIRED": "Cette question a expiré ou est indisponible. Consultez le dernier état du chat.",
-  "AI_OPERATION_DENIED": "L’utilisateur a refusé cette opération. Rien n’a été exécuté. Ne réessayez pas et ne contournez pas cette décision."
+  "AI_OPERATION_DENIED": "L’utilisateur a refusé cette opération. Rien n’a été exécuté. Ne réessayez pas et ne contournez pas cette décision.",
+  "AI_MESSAGE_QUEUED": "En attente du prochain appel d’outil"
 }

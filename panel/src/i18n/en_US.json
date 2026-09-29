@@ -145,5 +145,6 @@
   "AI_DENY": "Deny",
   "AI_APPROVAL_EXPIRED": "This approval has expired or is unavailable. Check the latest chat status.",
   "AI_QUESTION_EXPIRED": "This question has expired or is unavailable. Check the latest chat status.",
-  "AI_OPERATION_DENIED": "The user denied this operation. Nothing was executed. Do not retry or bypass this decision."
+  "AI_OPERATION_DENIED": "The user denied this operation. Nothing was executed. Do not retry or bypass this decision.",
+  "AI_MESSAGE_QUEUED": "Queued for the next tool boundary"
 }

@@ -214,6 +214,8 @@ function sidebar(api = {}) {
       "vuetify/components": components,
       "./api": {
         AccountChangedError,
+        updateChatSettings: async () => true,
+        enqueueChatMessage: async () => true,
         listConversations: async () => [],
         deleteConversations: async () => 0,
         getStatus: async () => ({
@@ -394,7 +396,7 @@ test("chat approvals show exact arguments, submit the user's decision and disapp
     await flushPromises();
     await f.wrapper.get("textarea").setValue("Delete file");
     await f.wrapper.get("form").trigger("submit");
-    assert.equal(f.wrapper.get('[aria-label="AI_PERMISSION_MODE"]').element.disabled, true);
+    assert.equal(f.wrapper.get('[aria-label="AI_PERMISSION_MODE"]').element.disabled, false);
     assert.match(f.wrapper.get('[role="status"]').text(), /AI_WAITING_APPROVAL/);
     assert.equal(f.wrapper.get(".ai-approval pre").text(), approval.arguments);
     assert.equal(f.wrapper.findAll("img").length, 0);
@@ -718,7 +720,7 @@ test("sidebar renders deltas while generation is pending and preserves partial t
   emit({ type: "delta", index: 1, content: "First fragment" });
   await vue.nextTick();
   assert.match(f.wrapper.text(), /First fragment/);
-  assert.equal(f.wrapper.get("textarea").element.disabled, true);
+  assert.equal(f.wrapper.get("textarea").element.disabled, false);
   emit({ type: "delta", index: 1, content: " and second" });
   await vue.nextTick();
   assert.match(f.wrapper.text(), /First fragment and second/);
@@ -1929,4 +1931,74 @@ test("long conversations reuse unchanged rows and coalesce stream scrolling", as
   await vue.nextTick();
   paint();
   assert.equal(scrolls, 1);
+});
+
+test("running chats allow live settings and queue follow-up input without aborting the stream", async (t) => {
+  const pending = deferred();
+  let emit;
+  let signal;
+  let sends = 0;
+  const settings = [];
+  const inputs = [];
+  const f = sidebar({
+    getStatus: async () => ({ ready: true, admin: false, userId: "alice", models: [
+      { id: "preset:default", name: "Default", source: "preset" },
+      { id: "preset:second", name: "Second", source: "preset" }
+    ] }),
+    sendMessage: async (_message, _conversation, _model, _user, current, onEvent) => {
+      sends++;
+      signal = current;
+      emit = onEvent;
+      emit({ type: "start", conversationId: "a".repeat(32), messages: [{ role: "user", content: "Original request" }] });
+      await pending.promise;
+    },
+    updateChatSettings: async (...args) => { settings.push(args); return true; },
+    enqueueChatMessage: async (...args) => { inputs.push(args); return true; },
+    savePreferences: async () => true
+  });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Original request");
+  await f.wrapper.get("form").trigger("submit");
+  assert.equal(f.wrapper.get("textarea").element.disabled, false);
+  assert.equal(f.wrapper.get('[aria-label="AI_PERMISSION_MODE"]').element.disabled, false);
+  assert.equal(f.wrapper.get('[aria-label="AI_SELECT_MODEL"]').element.disabled, false);
+  assert.equal(f.wrapper.get('[aria-label="AI_CHAT_SETTINGS"]').element.disabled, false);
+  await f.wrapper.get('[aria-label="AI_PERMISSION_MODE"]').setValue("full");
+  await f.wrapper.get('[aria-label="AI_SELECT_MODEL"]').setValue("preset:second");
+  await flushPromises();
+  assert.equal(settings.at(-1)[0].modelId, "preset:second");
+  assert.equal(settings.at(-1)[0].permissionMode, "full");
+  assert.equal(settings.at(-1)[1], "alice");
+  assert.equal(signal.aborted, false);
+  await f.wrapper.get('[aria-label="AI_CHAT_SETTINGS"]').trigger("click");
+  assert.equal(f.wrapper.find(".ai-sidebar-settings").exists(), true);
+  await f.wrapper.get('input[data-label="AI_SEND_ON_ENTER"]').setValue(false);
+  await f.wrapper.get(".ai-sidebar-settings form").trigger("submit");
+  await flushPromises();
+  assert.equal(signal.aborted, false);
+  assert.match(f.wrapper.get(".ai-messages").text(), /Original request/);
+  await f.wrapper.get('[aria-label="AI_CHAT_SETTINGS"]').trigger("click");
+  f.wrapper.findComponent({ name: "ModelManager" }).vm.$emit("changed");
+  await flushPromises();
+  assert.equal(settings.at(-1)[0].refresh, true);
+  assert.equal(signal.aborted, false);
+  await f.wrapper.get('[aria-label="AI_CHAT_SETTINGS"]').trigger("click");
+  assert.match(f.wrapper.get(".ai-messages").text(), /Original request/);
+  await f.wrapper.get("textarea").setValue("Additional instructions");
+  assert.equal(f.wrapper.get('[aria-label="AI_SEND"]').element.disabled, false);
+  assert.equal(f.wrapper.find('[aria-label="AI_STOP_REPLY"]').exists(), true);
+  await f.wrapper.get("form").trigger("submit");
+  await flushPromises();
+  assert.equal(sends, 1);
+  assert.equal(inputs[0][0].message, "Additional instructions");
+  assert.equal(inputs[0][0].conversationId, "a".repeat(32));
+  assert.match(f.wrapper.get(".ai-messages").text(), /AI_MESSAGE_QUEUED/);
+  assert.equal(f.wrapper.get("textarea").element.value, "");
+  emit({ type: "input", id: inputs[0][0].id, index: 1, message: { role: "user", content: inputs[0][0].message } });
+  await vue.nextTick();
+  assert.doesNotMatch(f.wrapper.get(".ai-messages").text(), /AI_MESSAGE_QUEUED/);
+  assert.equal(f.wrapper.findAll(".ai-message--user").length, 2);
+  assert.equal(signal.aborted, false);
 });

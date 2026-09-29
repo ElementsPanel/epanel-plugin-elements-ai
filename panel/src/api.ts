@@ -95,6 +95,18 @@ export const respondToQuestion = async (
     await fetchAuthenticated(`questions/${encodeURIComponent(id)}`, signal, { answer }, userId)
   );
 
+export const enqueueChatMessage = async (
+  input: { conversationId: string; id: string; message: string },
+  userId: string,
+  signal: AbortSignal
+) => packet<boolean>(await fetchAuthenticated("chat/input", signal, input, userId));
+
+export const updateChatSettings = async (
+  settings: { conversationId: string; modelId: string; permissionMode: PermissionMode; refresh?: boolean },
+  userId: string,
+  signal: AbortSignal
+) => packet<boolean>(await fetchAuthenticated("chat/settings", signal, settings, userId, "PUT"));
+
 export async function sendMessage(
   message: string,
   conversationId: string | undefined,

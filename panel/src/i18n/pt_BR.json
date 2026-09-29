@@ -145,5 +145,6 @@
   "AI_DENY": "Negar",
   "AI_APPROVAL_EXPIRED": "Esta aprovação expirou ou está indisponível. Verifique o estado mais recente do chat.",
   "AI_QUESTION_EXPIRED": "Esta pergunta expirou ou está indisponível. Verifique o estado mais recente do chat.",
-  "AI_OPERATION_DENIED": "O usuário negou esta operação. Nada foi executado. Não tente novamente nem contorne esta decisão."
+  "AI_OPERATION_DENIED": "O usuário negou esta operação. Nada foi executado. Não tente novamente nem contorne esta decisão.",
+  "AI_MESSAGE_QUEUED": "Na fila para a próxima chamada de ferramenta"
 }

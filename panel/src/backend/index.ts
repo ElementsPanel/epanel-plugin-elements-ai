@@ -77,6 +77,12 @@ export async function apply(ctx: PanelPluginContext) {
   router.post("/chat", permission, (request) => {
     streamChat(request, (emit) => chat.chat(request, emit), ctx.i18n.$t("AI_REQUEST_FAILED"));
   });
+  router.post("/chat/input", permission, (request) => {
+    request.body = chat.enqueueMessage(request);
+  });
+  router.put("/chat/settings", permission, async (request) => {
+    request.body = await chat.updateSettings(request);
+  });
   router.post("/approvals/:id", permission, (request) => {
     chat.respondToApproval(request, request.params.id, request.request.body);
     request.body = true;

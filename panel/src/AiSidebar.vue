@@ -18,7 +18,9 @@ import {
   getStatus,
   respondToApproval,
   respondToQuestion,
-  sendMessage
+  sendMessage,
+  updateChatSettings,
+  enqueueChatMessage
 } from "./api";
 import type {
   AiStatus,
@@ -111,12 +113,17 @@ let forceScroll = false;
 let controller: AbortController | undefined;
 let statusController: AbortController | undefined;
 let generation = 0;
+const streamStarted = ref(false);
+const queuedMessages = ref<{ id: string; content: string; failed: boolean }[]>([]);
+let settingsQueue: Promise<void> = Promise.resolve();
+let inputQueue: Promise<void> = Promise.resolve();
+let syncedSettings = "";
 const canSend = computed(
   () =>
     status.value?.ready &&
     status.value.models.some((model) => model.id === selectedModel.value) &&
     canContinue.value &&
-    !loading.value &&
+    (!loading.value || streamStarted.value) &&
     !checking.value &&
     !!draft.value.trim() &&
     draft.value.length <= 4000
@@ -232,6 +239,10 @@ function clearDownloads() {
 
 function reset(shouldClearDownloads = false) {
   generation++;
+  streamStarted.value = false;
+  queuedMessages.value = [];
+  settingsQueue = Promise.resolve();
+  inputQueue = Promise.resolve();
   cancelScroll();
   controller?.abort();
   statusController?.abort();
@@ -336,7 +347,10 @@ async function refreshStatus() {
     status.value = value;
     if (!messages.value.length && !conversationId.value) selectedModel.value = preferredModel();
     if (!value.models.some((model) => model.id === selectedModel.value)) {
-      if (conversationId.value) canContinue.value = false;
+      if (loading.value) {
+        selectedModel.value = value.models[0]?.id || "";
+        canContinue.value = !!selectedModel.value;
+      } else if (conversationId.value) canContinue.value = false;
       else {
         selectedModel.value = value.models[0]?.id || "";
         reset();
@@ -344,6 +358,10 @@ async function refreshStatus() {
     }
   } catch (cause) {
     if (current.signal.aborted || version !== generation) return;
+    if (loading.value && !(cause instanceof AccountChangedError)) {
+      error.value = cause instanceof Error ? cause.message : String(cause);
+      return;
+    }
     reset(true);
     showingHistory.value = false;
     showingSettings.value = false;
@@ -359,9 +377,43 @@ async function refreshStatus() {
   }
 }
 
+async function queueMessage(content: string) {
+  const current = controller;
+  const userId = status.value?.userId;
+  const id = conversationId.value;
+  if (!current || !userId || !id || !streamStarted.value) return;
+  const queued = { id: crypto.randomUUID().replace(/-/g, ""), content, failed: false };
+  queuedMessages.value.push(queued);
+  draft.value = "";
+  void scroll();
+  const version = generation;
+  inputQueue = inputQueue.then(async () => {
+    if (version !== generation) return;
+    try {
+      const accepted = await enqueueChatMessage({ conversationId: id, id: queued.id, message: content },
+        userId, current.signal);
+      if (!accepted) throw new Error(t("AI_EXPIRED"));
+    } catch (cause) {
+      if (version !== generation) return;
+      const pending = queuedMessages.value.find((item) => item.id === queued.id);
+      if (!pending) return; // The stream may acknowledge consumption before the HTTP response.
+      pending.failed = true;
+      if (cause instanceof AccountChangedError) accountChanged();
+      else error.value = cause instanceof Error ? cause.message : String(cause);
+    }
+  });
+  await inputQueue;
+}
+
 async function send() {
   if (!canSend.value || !status.value) return;
   const content = draft.value.trim();
+  if (loading.value) {
+    await queueMessage(content);
+    return;
+  }
+  streamStarted.value = false;
+  syncedSettings = JSON.stringify([selectedModel.value, permissionMode.value]);
   const version = generation;
   const current = new AbortController();
   controller = current;
@@ -384,7 +436,12 @@ async function send() {
         if (event.type !== "retry") retry.value = undefined;
         if (event.type === "start") {
           conversationId.value = event.conversationId;
+          streamStarted.value = true;
+          syncSettings();
           messages.value = event.messages;
+        } else if (event.type === "input") {
+          messages.value[event.index] = event.message;
+          queuedMessages.value = queuedMessages.value.filter((item) => item.id !== event.id);
         } else if (event.type === "message") {
           const previousQuestion = messages.value[event.index]?.question;
           messages.value[event.index] = event.message;
@@ -451,6 +508,8 @@ async function send() {
         }
       }
       loading.value = false;
+      streamStarted.value = false;
+      for (const queued of queuedMessages.value) queued.failed = true;
       approvalSubmitting.value = "";
       questionSubmitting.value = "";
       questionAnswers.value = {};
@@ -538,14 +597,39 @@ function settings() {
 }
 
 function changeModel(value: string) {
-  if (loading.value) return;
   selectedModel.value = value;
   if (status.value?.models.some((model) => model.id === value)) canContinue.value = true;
 }
 
+function syncSettings(refresh = false) {
+  const current = controller;
+  const userId = status.value?.userId;
+  if (!loading.value || !streamStarted.value || !conversationId.value || !current || !userId) return;
+  const settings = { conversationId: conversationId.value, modelId: selectedModel.value,
+    permissionMode: permissionMode.value, refresh };
+  const key = JSON.stringify([settings.modelId, settings.permissionMode]);
+  if (!refresh && key === syncedSettings) return;
+  syncedSettings = key;
+  const version = generation;
+  settingsQueue = settingsQueue.then(async () => {
+    if (current.signal.aborted || version !== generation || !loading.value) return;
+    try {
+      await updateChatSettings(settings, userId, current.signal);
+    } catch (cause) {
+      if (current.signal.aborted || version !== generation || !loading.value) return;
+      syncedSettings = "";
+      if (cause instanceof AccountChangedError) accountChanged();
+      else error.value = cause instanceof Error ? cause.message : String(cause);
+    }
+  });
+}
+
+watch([selectedModel, permissionMode], () => syncSettings());
+
 async function modelsChanged() {
-  reset();
+  if (!loading.value) reset();
   await refreshStatus();
+  syncSettings(true);
 }
 
 watch(
@@ -613,7 +697,7 @@ onBeforeUnmount(() => reset(true));
           icon="mdi-cog-outline"
           size="small"
           variant="text"
-          :disabled="loading || checking || !status"
+          :disabled="checking || !status"
           :title="t('AI_CHAT_SETTINGS')"
           :aria-label="t('AI_CHAT_SETTINGS')"
           :aria-pressed="showingSettings"
@@ -813,6 +897,12 @@ onBeforeUnmount(() => reset(true));
               </div>
             </template>
           </article>
+          <article v-for="queued in queuedMessages" :key="queued.id" class="ai-message ai-message--user">
+            <MarkdownMessage class="ai-text" :content="queued.content" />
+            <small :class="{ 'text-error': queued.failed }">{{
+              t(queued.failed ? "AI_REQUEST_FAILED" : "AI_MESSAGE_QUEUED")
+            }}</small>
+          </article>
           <div v-if="loading && !activeReasoning" class="ai-working" role="status">
             <span>{{ workingText }}</span>
             <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
@@ -919,7 +1009,7 @@ onBeforeUnmount(() => reset(true));
               class="ai-input"
               :placeholder="t('AI_INPUT')"
               :aria-label="t('AI_INPUT')"
-              :disabled="loading || checking || !status?.ready || !canContinue"
+              :disabled="checking || !status?.ready || !canContinue"
               variant="plain"
               rows="3"
               max-rows="6"
@@ -939,7 +1029,7 @@ onBeforeUnmount(() => reset(true));
                   class="ai-permission-picker"
                   :items="permissionOptions"
                   :aria-label="t('AI_PERMISSION_MODE')"
-                  :disabled="loading || checking"
+                  :disabled="checking"
                   :menu-props="{ location: 'top start' }"
                   :prepend-inner-icon="
                     permissionMode === 'full'
@@ -960,7 +1050,7 @@ onBeforeUnmount(() => reset(true));
                   :items="modelOptions"
                   :placeholder="t('AI_SELECT_MODEL')"
                   :aria-label="t('AI_SELECT_MODEL')"
-                  :disabled="loading || checking || !status?.models.length"
+                  :disabled="checking || !status?.models.length"
                   :menu-props="{ location: 'top start', maxHeight: 300 }"
                   prepend-inner-icon="mdi-cube-outline"
                   density="compact"
@@ -985,7 +1075,6 @@ onBeforeUnmount(() => reset(true));
                 @click="controller?.abort()"
               />
               <VBtn
-                v-else
                 type="submit"
                 icon="mdi-arrow-up"
                 size="x-small"
