@@ -53,11 +53,11 @@ const internalDownloadStatusTools = new Set([
 ]);
 const waitDownloadDefinition = definition(
   "wait_download_task",
-  "Wait until one previously started download or installation reaches a terminal state. Use taskType java with taskId set to the returned Java runtime id; mod or msl_install with instanceUuid and the returned taskId; msl_download with instanceUuid and the returned path. Use exact returned identifiers. This blocks and reports progress, so finish other useful work first, then call it once when no other work remains.",
+  "Wait until one previously started download or installation reaches a terminal state. Use taskType java with taskId set to the returned Java runtime id; mod or msl_install with instanceUuid and the returned taskId; msl_download with instanceUuid and the returned path. Use taskType docker with the taskId returned by pull_docker_image. Use exact returned identifiers. This blocks and reports progress, so finish other useful work first, then call it once when no other work remains.",
   {
     taskType: {
       type: "string",
-      enum: ["java", "mod", "msl_download", "msl_install"]
+      enum: ["java", "mod", "msl_download", "msl_install", "docker"]
     },
     daemonId: string,
     instanceUuid: string,
@@ -187,6 +187,52 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
     tools.push(
       ...mslDefinitions.filter((tool) => !internalDownloadStatusTools.has(tool.function.name)),
       definition(
+        "list_docker_images",
+        "List locally available Docker images on a node. Use this before pulling or creating a Docker instance.",
+        { daemonId: string },
+        ["daemonId"]
+      ),
+      definition(
+        "pull_docker_image",
+        "Make a Docker image available through the panel built-in image builder using a FROM-only Dockerfile. It downloads missing base layers and may reuse cached layers; this does not force-refresh an existing tag. Returns a unique local image alias and a background task visible in the panel image build progress. Use wait_download_task with taskType docker and the returned taskId, then use the returned image alias in create_docker_instance.",
+        {
+          daemonId: string,
+          image: { type: "string", minLength: 1, maxLength: 255 }
+        },
+        ["daemonId", "image"]
+      ),
+      definition(
+        "create_docker_instance",
+        "Create a stopped panel-managed Docker instance using an already pulled image. Supply an absolute host cwd and optional absolute container workingDir to mount it. An empty startCommand uses the image default command. Ports use host:container/tcp or host:container/udp. Does not start a container; use control_instance only if requested. Do not retry uncertain creation; list instances first.",
+        {
+          daemonId: string,
+          config: {
+            type: "object",
+            properties: adminConfig,
+            required: ["nickname", "cwd"],
+            additionalProperties: false
+          },
+          docker: {
+            type: "object",
+            properties: {
+              image: { type: "string", minLength: 1, maxLength: 255 },
+              workingDir: { type: "string", minLength: 1, maxLength: 2048 },
+              ports: {
+                type: "array",
+                maxItems: 64,
+                items: { type: "string", pattern: "^[0-9]{1,5}:[0-9]{1,5}/(tcp|udp)$" }
+              },
+              env: { type: "array", maxItems: 100, items: { type: "string", maxLength: 4096 } },
+              memory: { type: "integer", minimum: 0, maximum: 1048576 },
+              networkMode: { type: "string", enum: ["bridge", "host", "none"] }
+            },
+            required: ["image"],
+            additionalProperties: false
+          }
+        },
+        ["daemonId", "config", "docker"]
+      ),
+      definition(
         "list_java_versions",
         "List Java versions available from the MSL mirror catalog on a daemon.",
         { daemonId: string },
@@ -256,6 +302,8 @@ export class ToolError extends Error {}
 const sensitiveTools = new Set([
   "update_instance",
   "create_instance",
+  "create_docker_instance",
+  "pull_docker_image",
   "create_msl_instance",
   "download_msl_server",
   "download_mod",
@@ -1290,6 +1338,172 @@ export class PanelTools {
     return status;
   }
 
+  private async dockerTool(
+    name: string,
+    args: JsonObject,
+    identity: ReturnType<PanelTools["identity"]>
+  ) {
+    if (!identity.elevated) this.fail("AI_FORBIDDEN");
+    this.keys(
+      args,
+      name === "list_docker_images"
+        ? ["daemonId"]
+        : name === "pull_docker_image"
+        ? ["daemonId", "image"]
+        : ["daemonId", "config", "docker"]
+    );
+    const daemonId = this.id(args.daemonId);
+    const check = () => {
+      const current = this.identity();
+      if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
+    };
+    const imageReference = (value: unknown) => {
+      if (
+        typeof value !== "string" ||
+        value.length > 255 ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$/.test(value)
+      )
+        this.fail("AI_INVALID_TOOL");
+      return value as string;
+    };
+    if (name === "list_docker_images") {
+      const images = await this.remote(daemonId).request("environment/images", {});
+      check();
+      if (!Array.isArray(images)) this.fail("AI_OPERATION_FAILED");
+      return {
+        daemonId,
+        images: images.map((item: JsonObject) => ({
+          id: item.Id,
+          tags: item.RepoTags,
+          digests: item.RepoDigests,
+          size: item.Size
+        }))
+      };
+    }
+    if (name === "pull_docker_image") {
+      const image = imageReference(args.image);
+      if (image === "scratch") this.fail("AI_INVALID_TOOL");
+      // Use the same builder as the panel image page. A unique target tag avoids
+      // mistaking an earlier build's completion for this request's completion.
+      const tag = randomBytes(16).toString("hex");
+      const localImage = `epanel-ai-pull:${tag}`;
+      const result = await this.remote(daemonId).request("environment/new_image", {
+        name: "epanel-ai-pull",
+        tag,
+        dockerFile: `FROM ${image}\n`
+      });
+      check();
+      if (result !== true) this.fail("AI_OPERATION_FAILED");
+      return {
+        daemonId,
+        taskId: localImage,
+        sourceImage: image,
+        image: localImage,
+        state: "running"
+      };
+    }
+    const config = this.config(args.config, true);
+    if (
+      typeof config.nickname !== "string" ||
+      typeof config.cwd !== "string" ||
+      !/^(\/|[a-zA-Z]:[\\/])/.test(config.cwd) ||
+      config.eventTask?.autoStart === true
+    )
+      this.fail("AI_INVALID_TOOL");
+    const docker = this.object(args.docker);
+    this.keys(docker, ["image", "workingDir", "ports", "env", "memory", "networkMode"]);
+    const image = imageReference(docker.image);
+    if (
+      docker.workingDir !== undefined &&
+      (typeof docker.workingDir !== "string" ||
+        !docker.workingDir.startsWith("/") ||
+        docker.workingDir.length > 2048 ||
+        /[\x00-\x1f]/.test(docker.workingDir))
+    )
+      this.fail("AI_INVALID_TOOL");
+    if (
+      docker.networkMode !== undefined &&
+      !["bridge", "host", "none"].includes(docker.networkMode)
+    )
+      this.fail("AI_INVALID_TOOL");
+    if (
+      docker.memory !== undefined &&
+      (!Number.isInteger(docker.memory) || docker.memory < 0 || docker.memory > 1048576)
+    )
+      this.fail("AI_INVALID_TOOL");
+    if (
+      docker.ports !== undefined &&
+      (!Array.isArray(docker.ports) ||
+        docker.ports.length > 64 ||
+        docker.ports.some((port: unknown) => {
+          if (typeof port !== "string") return true;
+          const match = /^(\d{1,5}):(\d{1,5})\/(tcp|udp)$/.exec(port);
+          return !match || [+match[1], +match[2]].some((number) => number < 1 || number > 65535);
+        }))
+    )
+      this.fail("AI_INVALID_TOOL");
+    if (docker.networkMode && docker.networkMode !== "bridge" && docker.ports?.length)
+      this.fail("AI_INVALID_TOOL");
+    if (
+      docker.env !== undefined &&
+      (!Array.isArray(docker.env) ||
+        docker.env.length > 100 ||
+        docker.env.some(
+          (value: unknown) =>
+            typeof value !== "string" ||
+            value.length > 4096 ||
+            !/^[A-Za-z_][A-Za-z0-9_]*=/.test(value) ||
+            value.includes("\0")
+        ))
+    )
+      this.fail("AI_INVALID_TOOL");
+    const images = await this.remote(daemonId).request("environment/images", {});
+    check();
+    const taggedImage =
+      image.includes("@") || image.split("/").pop()!.includes(":") ? image : `${image}:latest`;
+    if (
+      !Array.isArray(images) ||
+      !images.some(
+        (item: JsonObject) =>
+          item.Id === image ||
+          item.RepoTags?.includes(taggedImage) ||
+          item.RepoDigests?.includes(image)
+      )
+    )
+      this.fail("AI_OPERATION_FAILED");
+    const result = await this.remote(daemonId).request("instance/new", {
+      ...config,
+      startCommand: config.startCommand ?? "",
+      processType: "docker",
+      eventTask: { ...config.eventTask, autoStart: false },
+      docker: {
+        ...docker,
+        image,
+        networkMode: docker.networkMode ?? "bridge",
+        privileged: false,
+        workingDir: docker.workingDir ?? "",
+        changeWorkdir: !!docker.workingDir
+      }
+    });
+    if (!result || typeof result.instanceUuid !== "string" || !result.instanceUuid)
+      this.fail("AI_OPERATION_FAILED");
+    this.ctx.operations.log("instance_create", {
+      daemon_id: daemonId,
+      instance_id: result.instanceUuid,
+      instance_name: config.nickname,
+      operator_ip: this.request.ip,
+      operator_name: identity.userName
+    });
+    return {
+      daemonId,
+      instanceUuid: result.instanceUuid,
+      nickname: config.nickname,
+      image,
+      created: true,
+      started: false
+    };
+  }
+
   private async waitDownloadTask(
     args: JsonObject,
     identity: ReturnType<PanelTools["identity"]>,
@@ -1300,9 +1514,58 @@ export class PanelTools {
     const taskType = args.taskType;
     const daemonId = this.id(args.daemonId);
     let result: unknown;
-    if (taskType === "java") {
-      if (args.instanceUuid !== undefined || args.path !== undefined)
-        this.fail("AI_INVALID_TOOL");
+    if (taskType === "docker") {
+      if (!identity.elevated) this.fail("AI_FORBIDDEN");
+      if (args.instanceUuid !== undefined || args.path !== undefined) this.fail("AI_INVALID_TOOL");
+      const taskId = this.id(args.taskId);
+      if (!/^epanel-ai-pull:[a-f0-9]{32}$/.test(taskId)) this.fail("AI_INVALID_TOOL");
+      const deadline = Date.now() + DOWNLOAD_WAIT_TIMEOUT_MS;
+      let unknownSince: number | undefined;
+      const check = () => {
+        const current = this.identity();
+        if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
+      };
+      do {
+        check();
+        const progress = await this.remote(daemonId).request("environment/progress", {});
+        check();
+        if (!progress || typeof progress !== "object" || Array.isArray(progress))
+          this.fail("AI_OPERATION_FAILED");
+        const code = Object.prototype.hasOwnProperty.call(progress, taskId)
+          ? progress[taskId]
+          : undefined;
+        if (code !== undefined && ![1, 2, -1].includes(code)) this.fail("AI_OPERATION_FAILED");
+        const state =
+          code === 1 ? "running" : code === 2 ? "completed" : code === -1 ? "failed" : "unknown";
+        if (state === "completed") {
+          const images = await this.remote(daemonId).request("environment/images", {});
+          check();
+          if (
+            !Array.isArray(images) ||
+            !images.some((item: JsonObject) => item.RepoTags?.includes(taskId))
+          )
+            this.fail("AI_OPERATION_FAILED");
+        }
+        if (state === "unknown") {
+          // The built-in route acknowledges before registering build progress.
+          // Allow that brief race, but do not wait forever after a daemon restart.
+          unknownSince ??= Date.now();
+          if (Date.now() - unknownSince >= 10_000) this.fail("AI_OPERATION_FAILED");
+        } else unknownSince = undefined;
+        result = {
+          daemonId,
+          taskId,
+          image: taskId,
+          state,
+          ...(state === "failed" ? { error: this.ctx.i18n.$t("AI_OPERATION_FAILED") } : {})
+        };
+        await this.reportProgress(onProgress, { value: state === "completed" ? 100 : undefined });
+        if (["completed", "failed"].includes(state) || !waitForDownloads) break;
+        if (Date.now() >= deadline) this.fail("AI_OPERATION_FAILED");
+        await this.wait(1000);
+      } while (true);
+    } else if (taskType === "java") {
+      if (args.instanceUuid !== undefined || args.path !== undefined) this.fail("AI_INVALID_TOOL");
       result = await this.javaTool(
         "get_java_download_status",
         { daemonId, javaId: this.id(args.taskId) },
@@ -1378,6 +1641,8 @@ export class PanelTools {
       if (
         ![
           "create_instance",
+          "create_docker_instance",
+          "pull_docker_image",
           "create_msl_instance",
           "download_java",
           "execute_node_command"
@@ -1408,12 +1673,9 @@ export class PanelTools {
         options.onProgress
       );
     if (name === "wait_download_task")
-      return this.waitDownloadTask(
-        args,
-        identity,
-        options.waitForDownloads,
-        options.onProgress
-      );
+      return this.waitDownloadTask(args, identity, options.waitForDownloads, options.onProgress);
+    if (["list_docker_images", "pull_docker_image", "create_docker_instance"].includes(name))
+      return this.dockerTool(name, args, identity);
     if (name === "execute_node_command") return this.executeNodeCommand(args, identity);
     if (
       ["delete_instance_directory", "delete_instance", "delete_instance_completely"].includes(

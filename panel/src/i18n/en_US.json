@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "List Docker images",
+  "AI_TOOL_pull_docker_image": "Pull Docker image",
+  "AI_TOOL_create_docker_instance": "Create Docker instance",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "New chat",
   "AI_SETTINGS": "Plugin settings",

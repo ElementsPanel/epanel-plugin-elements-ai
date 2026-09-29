@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "列出 Docker 映像",
+  "AI_TOOL_pull_docker_image": "拉取 Docker 映像",
+  "AI_TOOL_create_docker_instance": "建立 Docker 實例",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "新增對話",
   "AI_SETTINGS": "外掛設定",

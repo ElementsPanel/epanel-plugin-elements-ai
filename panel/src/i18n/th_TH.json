@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "แสดงรายการอิมเมจ Docker",
+  "AI_TOOL_pull_docker_image": "ดึงอิมเมจ Docker",
+  "AI_TOOL_create_docker_instance": "สร้างอินสแตนซ์ Docker",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "แชตใหม่",
   "AI_SETTINGS": "การตั้งค่าปลั๊กอิน",

@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "Listar imágenes Docker",
+  "AI_TOOL_pull_docker_image": "Descargar imagen Docker",
+  "AI_TOOL_create_docker_instance": "Crear instancia Docker",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "Nueva conversación",
   "AI_SETTINGS": "Configuración del complemento",

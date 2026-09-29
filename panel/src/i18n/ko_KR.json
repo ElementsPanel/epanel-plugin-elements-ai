@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "Docker 이미지 목록",
+  "AI_TOOL_pull_docker_image": "Docker 이미지 가져오기",
+  "AI_TOOL_create_docker_instance": "Docker 인스턴스 생성",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "새 대화",
   "AI_SETTINGS": "플러그인 설정",

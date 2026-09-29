@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "Docker imajlarını listele",
+  "AI_TOOL_pull_docker_image": "Docker imajını indir",
+  "AI_TOOL_create_docker_instance": "Docker örneği oluştur",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "Yeni sohbet",
   "AI_SETTINGS": "Eklenti ayarları",

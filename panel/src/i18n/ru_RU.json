@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "Список образов Docker",
+  "AI_TOOL_pull_docker_image": "Загрузить образ Docker",
+  "AI_TOOL_create_docker_instance": "Создать экземпляр Docker",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "Новый чат",
   "AI_SETTINGS": "Настройки плагина",

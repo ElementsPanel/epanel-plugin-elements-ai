@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "Docker イメージ一覧",
+  "AI_TOOL_pull_docker_image": "Docker イメージを取得",
+  "AI_TOOL_create_docker_instance": "Docker インスタンスを作成",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "新しいチャット",
   "AI_SETTINGS": "プラグイン設定",

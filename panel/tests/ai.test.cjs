@@ -2700,3 +2700,194 @@ test("chat streams mod download requests and blocks duplicate mutations with new
   assert.equal(receipts.find((event) => event.message.ok)?.message.ok, true);
   assert.equal(receipts.at(-1).message.ok, false);
 });
+
+test("Docker tools are admin-only and recheck approval permissions", async () => {
+  const user = fixture();
+  for (const name of ["list_docker_images", "pull_docker_image", "create_docker_instance"])
+    await assert.rejects(user.tools().execute(name, { daemonId: "node-a" }), /AI_FORBIDDEN/);
+  await assert.rejects(
+    user
+      .tools()
+      .execute("wait_download_task", { daemonId: "node-a", taskType: "docker", taskId: "pull-1" }),
+    /AI_FORBIDDEN/
+  );
+  assert.equal(user.calls.length, 0);
+  const admin = fixture({ admin: true });
+  await assert.rejects(
+    admin
+      .tools()
+      .execute(
+        "pull_docker_image",
+        { daemonId: "node-a", image: "alpine" },
+        undefined,
+        async () => {
+          admin.users.get("alice").permission = 1;
+        }
+      ),
+    /AI_FORBIDDEN/
+  );
+  assert.equal(admin.calls.length, 0);
+});
+
+test("Docker pulls use the panel builder and wait for its verified image", async () => {
+  const f = fixture({ admin: true });
+  let polls = 0;
+  let taskId;
+  f.remote(async (event, args) => {
+    if (event === "environment/new_image") {
+      assert.equal(args.dockerFile, "FROM registry.example:5000/team/app:latest\n");
+      assert.equal(args.name, "epanel-ai-pull");
+      taskId = `${args.name}:${args.tag}`;
+      return true;
+    }
+    if (event === "environment/progress") {
+      polls++;
+      return polls === 1 ? {} : { [taskId]: polls === 2 ? 1 : 2 };
+    }
+    assert.equal(event, "environment/images");
+    return [{ RepoTags: [taskId] }];
+  });
+  let approvals = 0;
+  const receipt = await f.tools().execute(
+    "pull_docker_image",
+    {
+      daemonId: "node-a",
+      image: "registry.example:5000/team/app:latest"
+    },
+    undefined,
+    async () => {
+      approvals++;
+    }
+  );
+  assert.equal(approvals, 1);
+  assert.equal(receipt.image, taskId);
+  assert.equal(receipt.sourceImage, "registry.example:5000/team/app:latest");
+  const args = { daemonId: "node-a", taskType: "docker", taskId: receipt.taskId };
+  const progress = [];
+  const result = await f.tools().execute("wait_download_task", args, undefined, undefined, {
+    waitForDownloads: true,
+    onProgress: (value) => progress.push(value)
+  });
+  assert.equal(result.state, "completed");
+  assert.equal(polls, 3);
+  assert.equal(progress.at(-1).value, 100);
+  f.remote(async () => ({ [taskId]: -1 }));
+  assert.equal((await f.tools().execute("wait_download_task", args)).state, "failed");
+  f.remote(async (event) => (event === "environment/progress" ? { [taskId]: 2 } : []));
+  await assert.rejects(f.tools().execute("wait_download_task", args), /AI_OPERATION_FAILED/);
+});
+
+test("Docker builder rejects injected Dockerfile instructions and uncertain acknowledgements", async () => {
+  const f = fixture({ admin: true });
+  for (const image of [
+    "alpine\nRUN touch /tmp/unwanted",
+    "alpine AS stage",
+    "--platform=linux/amd64",
+    "scratch",
+    "",
+    "a".repeat(256)
+  ])
+    await assert.rejects(
+      f.tools().execute("pull_docker_image", { daemonId: "node-a", image }),
+      /AI_INVALID_TOOL/
+    );
+  assert.equal(f.calls.length, 0);
+  await assert.rejects(
+    f
+      .tools()
+      .execute("wait_download_task", {
+        daemonId: "node-a",
+        taskType: "docker",
+        taskId: "not-a-build"
+      }),
+    /AI_INVALID_TOOL/
+  );
+  f.remote(async () => false);
+  await assert.rejects(
+    f.tools().execute("pull_docker_image", { daemonId: "node-a", image: "alpine" }),
+    /AI_OPERATION_FAILED/
+  );
+  const tags = [];
+  f.remote(async (_event, args) => {
+    tags.push(args.tag);
+    return true;
+  });
+  await f.tools().execute("pull_docker_image", { daemonId: "node-a", image: "alpine" });
+  await f.tools().execute("pull_docker_image", { daemonId: "node-a", image: "alpine" });
+  assert.notEqual(tags[0], tags[1]);
+});
+
+test("Docker instance uses a local image and preserves stopped state without exposing env", async () => {
+  const f = fixture({ admin: true });
+  const args = {
+    daemonId: "node-a",
+    config: { nickname: "Docker app", cwd: "/srv/app" },
+    docker: {
+      image: "alpine",
+      ports: ["8080:80/tcp"],
+      env: ["TOKEN=secret"],
+      workingDir: "/app",
+      memory: 512
+    }
+  };
+  f.remote(async (event) =>
+    event === "environment/images"
+      ? [{ RepoTags: ["alpine:latest"] }]
+      : { instanceUuid: "docker-id" }
+  );
+  const result = await f.tools().execute("create_docker_instance", args);
+  assert.equal(result.started, false);
+  assert.equal(JSON.stringify(result).includes("secret"), false);
+  const config = f.calls.find((call) => call.event === "instance/new").data;
+  assert.equal(config.processType, "docker");
+  assert.equal(config.startCommand, "");
+  assert.equal(config.eventTask.autoStart, false);
+  assert.equal(config.docker.privileged, false);
+  assert.equal(f.logs[0].type, "instance_create");
+  for (const docker of [
+    { image: "alpine", privileged: true },
+    { image: "alpine", ports: ["65536:80/tcp"] },
+    { image: "alpine", env: ["broken"] },
+    { image: "alpine;id" },
+    { image: "alpine", networkMode: "host", ports: ["80:80/tcp"] }
+  ])
+    await assert.rejects(
+      f.tools().execute("create_docker_instance", { ...args, docker }),
+      /AI_INVALID_TOOL/
+    );
+  f.remote(async () => []);
+  await assert.rejects(f.tools().execute("create_docker_instance", args), /AI_OPERATION_FAILED/);
+  assert.equal(f.calls.filter((call) => call.event === "instance/new").length, 1);
+});
+
+test("Docker pull participates in chat background task tracking", async (t) => {
+  let round = 0;
+  let taskId;
+  const f = fixture({
+    admin: true,
+    completion: async () =>
+      ++round === 1
+        ? call("pull_docker_image", { daemonId: "node-a", image: "alpine" })
+        : answer("Pull started")
+  });
+  t.after(() => f.chat.dispose());
+  f.remote(async (event, args) => {
+    if (event === "environment/new_image") {
+      taskId = `${args.name}:${args.tag}`;
+      return true;
+    }
+    if (event === "environment/progress") return { [taskId]: 2 };
+    if (event === "environment/images") return [{ RepoTags: [taskId] }];
+    assert.fail(event);
+  });
+  const events = [];
+  await f.chat.chat(f.request({ message: "Pull alpine", permissionMode: "full" }), async (event) =>
+    events.push(event)
+  );
+  assert.ok(
+    events.some(
+      (event) => event.type === "download" && event.task?.id === `docker:node-a:${taskId}`
+    )
+  );
+  assert.ok(f.calls.some((call) => call.event === "environment/progress"));
+});

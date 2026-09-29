@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_docker_images": "Lister les images Docker",
+  "AI_TOOL_pull_docker_image": "Télécharger une image Docker",
+  "AI_TOOL_create_docker_instance": "Créer une instance Docker",
   "AI_TITLE": "Elements AI",
   "AI_NEW_CHAT": "Nouvelle conversation",
   "AI_SETTINGS": "Paramètres du plugin",
