@@ -3,7 +3,7 @@
   "name": "Elements AI",
   "displayName": "Elements AI",
   "version": "0.1.1",
-  "description": "通过页眉聊天侧栏管理实例，支持管理员与普通用户的权限隔离。",
+  "description": "让 Agent 接管面板。",
   "category": "tools",
   "priority": 100,
   "backend": "src/backend/index.ts",
