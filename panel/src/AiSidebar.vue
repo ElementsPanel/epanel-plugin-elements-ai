@@ -743,6 +743,7 @@ onBeforeUnmount(() => reset(true));
           @account-changed="accountChanged"
         />
         <div v-else key="chat" class="ai-chat-page">
+        <div class="ai-messages-container">
         <div
           ref="list"
           class="ai-messages"
@@ -912,6 +913,18 @@ onBeforeUnmount(() => reset(true));
             <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
           </div>
         </div>
+        <VBtn
+          v-if="showScrollBottom"
+          class="ai-scroll-bottom"
+          icon="mdi-chevron-down"
+          size="small"
+          variant="flat"
+          color="primary"
+          :title="t('AI_SCROLL_BOTTOM')"
+          :aria-label="t('AI_SCROLL_BOTTOM')"
+          @click="scroll(true)"
+        />
+        </div>
         <Transition name="ai-download-panel">
           <div
             v-if="downloads.length"
@@ -984,17 +997,6 @@ onBeforeUnmount(() => reset(true));
             </Transition>
           </div>
         </Transition>
-        <VBtn
-          v-if="showScrollBottom"
-          class="ai-scroll-bottom"
-          icon="mdi-chevron-down"
-          size="small"
-          variant="flat"
-          color="primary"
-          :title="t('AI_SCROLL_BOTTOM')"
-          :aria-label="t('AI_SCROLL_BOTTOM')"
-          @click="scroll(true)"
-        />
         <form class="ai-composer" @submit.prevent="send">
           <VAlert
             v-if="!canContinue"
@@ -1145,6 +1147,13 @@ onBeforeUnmount(() => reset(true));
   min-height: 0;
   flex-direction: column;
 }
+.ai-messages-container {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
 .ai-sidebar-page-enter-active,
 .ai-sidebar-page-leave-active {
   transition: opacity 180ms ease;
@@ -1170,11 +1179,13 @@ onBeforeUnmount(() => reset(true));
   background: transparent;
 }
 .ai-scroll-bottom {
-  align-self: flex-end;
-  flex: 0 0 auto;
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  z-index: 1;
   width: 36px;
   height: 36px;
-  margin: 8px 20px 0;
+  transform: translateX(-50%);
   border-radius: 50%;
 }
 .ai-download-toggle {

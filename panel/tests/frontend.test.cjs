@@ -1252,7 +1252,7 @@ test("sending while scrolled up forces the latest message into view and exposes 
   await messages.trigger("scroll");
   await vue.nextTick();
   assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), true);
-  assert.ok(f.wrapper.html().indexOf("ai-downloads") < f.wrapper.html().indexOf("ai-scroll-bottom") ||
+  assert.ok(f.wrapper.html().indexOf("ai-scroll-bottom") < f.wrapper.html().indexOf("ai-downloads") ||
     !f.wrapper.find(".ai-downloads").exists());
   await f.wrapper.get(".ai-scroll-bottom").trigger("click");
   paint();
@@ -1342,7 +1342,7 @@ test("a single download task has no separator above its progress card", async (t
   });
   await vue.nextTick();
   assert.deepEqual(f.wrapper.get(".ai-downloads").classes(), ["ai-downloads", "ai-downloads--single"]);
-  assert.ok(f.wrapper.html().indexOf("ai-downloads") < f.wrapper.html().indexOf("ai-scroll-bottom") ||
+  assert.ok(f.wrapper.html().indexOf("ai-scroll-bottom") < f.wrapper.html().indexOf("ai-downloads") ||
     !f.wrapper.find(".ai-scroll-bottom").exists());
 });
 
