@@ -16,6 +16,7 @@ import {
 import ConversationHistory from "./ConversationHistory.vue";
 import FileDiffView from "./FileDiff.vue";
 import MarkdownMessage from "./MarkdownMessage.vue";
+import ReasoningMessage from "./ReasoningMessage.vue";
 import SidebarSettings from "./SidebarSettings.vue";
 import {
   AccountChangedError,
@@ -87,8 +88,6 @@ const activeReasoning = computed(() =>
     (message) => message.role === "assistant" && message.reasoning && !message.reasoningComplete
   )
 );
-const messageReasoning = (message: ChatMessage) =>
-  (message.reasoning || "").replace(/\s+/g, " ").trim().slice(-300);
 const workingText = computed(() =>
   waitingForQuestion.value
     ? t("AI_WAITING_ANSWER")
@@ -782,6 +781,7 @@ onBeforeUnmount(() => reset(true));
               message.question,
               locale,
               message.pending && loading,
+              message.role === 'assistant' && loading && index === messages.length - 1,
               message.approval && approvalSubmitting,
               message.question && questionSubmitting,
               message.question && questionAnswers[message.question.id]
@@ -884,24 +884,17 @@ onBeforeUnmount(() => reset(true));
               <span v-if="message.role !== 'user'" class="ai-role">{{
                 t(message.role === "error" ? "AI_FAILED" : "AI_TITLE")
               }}</span>
-              <div
-                v-if="message.role === 'assistant' && messageReasoning(message)"
-                class="ai-message-thinking"
-                role="status"
-              >
-                <span class="ai-thinking-label">{{
-                  t(
-                    message.reasoningComplete
-                      ? "AI_THINKING_COMPLETE_PREFIX"
-                      : "AI_THINKING_PREFIX"
-                  )
-                }}</span>
-                <span class="ai-thinking-content">{{ messageReasoning(message) }}</span>
-              </div>
+              <ReasoningMessage
+                v-if="message.role === 'assistant' && message.reasoning"
+                :content="message.reasoning"
+                :complete="message.reasoningComplete"
+              />
               <MarkdownMessage
                 v-if="message.role !== 'error'"
                 class="ai-text"
                 :content="message.content"
+                :streaming="loading && message.role === 'assistant' && index === messages.length - 1"
+                @rendered="scroll()"
               />
               <div v-else class="ai-text">{{ message.content }}</div>
               <div v-if="message.role === 'assistant' && message.workComplete" class="ai-work-complete">
@@ -1491,24 +1484,6 @@ onBeforeUnmount(() => reset(true));
   font-size: 13px;
   font-weight: 500;
   color: rgba(var(--v-theme-on-surface), 0.65);
-}
-.ai-message-thinking {
-  display: flex;
-  max-width: 100%;
-  margin: 2px 0 6px;
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  font-size: 13px;
-  font-weight: 500;
-}
-.ai-thinking-label {
-  flex: none;
-  margin-right: 4px;
-}
-.ai-thinking-content {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .ai-work-complete {
   width: fit-content;

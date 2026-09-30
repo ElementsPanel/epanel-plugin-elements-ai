@@ -76,7 +76,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-function sidebar(api = {}) {
+function sidebar(api = {}, moduleOverrides = {}) {
   const state = vue.reactive({ open: false });
   const route = vue.reactive({ path: "/instances" });
   const navigations = [];
@@ -237,7 +237,8 @@ function sidebar(api = {}) {
           onEvent({ type: "done", conversationId: "a".repeat(32) });
         },
         ...api
-      }
+      },
+      ...moduleOverrides
     },
     component.content
   ).default;
@@ -795,6 +796,49 @@ test("sidebar keeps completed reasoning and work status beneath the assistant me
   await flushPromises();
   assert.equal(f.wrapper.get(".ai-thinking-label").text(), "AI_THINKING_COMPLETE_PREFIX");
   assert.equal(f.wrapper.get(".ai-work-complete").text(), "AI_WORK_COMPLETE");
+});
+
+test("reasoning follows the newest text, expands fully, and remains readable after completion", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({ sendMessage: async (_m, _c, _model, _user, _signal, onEvent) => {
+    emit = onEvent;
+    await pending.promise;
+  } });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Think");
+  await f.wrapper.get("form").trigger("submit");
+  let reasoning = "Beginning\n" + "thinking ".repeat(100) + "latest";
+  emit({ type: "message", index: 1, message: { role: "assistant", content: "", reasoning } });
+  await vue.nextTick();
+  const preview = f.wrapper.get(".ai-thinking-content").element;
+  Object.defineProperty(preview, "scrollWidth", { configurable: true, value: 1600 });
+  paint();
+  assert.equal(preview.scrollLeft, 1600);
+  assert.equal(f.wrapper.find(".ai-thinking-detail").exists(), false);
+  preview.scrollLeft = 0;
+  reasoning += " newer";
+  emit({ type: "message", index: 1, message: { role: "assistant", content: "", reasoning } });
+  await vue.nextTick();
+  paint();
+  assert.equal(preview.scrollLeft, 1600);
+  const details = f.wrapper.get(".ai-message-thinking");
+  details.element.open = true;
+  await details.trigger("toggle");
+  assert.equal(f.wrapper.get(".ai-thinking-detail").text(), reasoning);
+  assert.match(f.wrapper.get(".ai-thinking-detail").text(), /^Beginning/);
+  reasoning += " final";
+  emit({ type: "message", index: 1, message: { role: "assistant", content: "", reasoning, reasoningComplete: true } });
+  await vue.nextTick();
+  assert.equal(f.wrapper.get(".ai-thinking-detail").text(), reasoning);
+  details.element.open = false;
+  await details.trigger("toggle");
+  paint();
+  assert.equal(preview.scrollLeft, 1600);
+  assert.equal(f.wrapper.find(".ai-thinking-detail").exists(), false);
+  assert.equal(f.wrapper.get(".ai-thinking-label").text(), "AI_THINKING_COMPLETE_PREFIX");
 });
 
 test("reconnection replaces partial messages, shows its status and can be stopped immediately", async (t) => {
@@ -1713,7 +1757,8 @@ test("personal models use a compact list and modal drafts without discarding sid
   f.wrapper.unmount();
 });
 
-test("the browser SSE reader emits split UTF-8 chunks before the response completes", async () => {
+test("the browser SSE reader emits split UTF-8 chunks before the response completes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const oldFetch = global.fetch;
   let controller;
   global.fetch = async () => ({
@@ -1757,6 +1802,7 @@ test("the browser SSE reader emits split UTF-8 chunks before the response comple
     );
     for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
     await flushPromises();
+    t.mock.timers.tick(32);
     assert.equal(events[0].content, "你好");
     assert.equal(finished, false);
     controller.enqueue(new TextEncoder().encode('data: {"type":"done","conversationId":"id"}\n\n'));
@@ -2052,6 +2098,43 @@ test("long conversations reuse unchanged rows and coalesce stream scrolling", as
   await vue.nextTick();
   paint();
   assert.equal(scrolls, 1);
+});
+
+test("long streaming answers bound Markdown parsing and flush final text immediately", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = deferred();
+  let emit;
+  let parses = 0;
+  const { marked } = frontendRequire("marked");
+  const f = sidebar({ sendMessage: async (_m, _c, _model, _user, _signal, onEvent) => {
+    emit = onEvent;
+    await pending.promise;
+  } }, { marked: { marked: { ...marked, parse(...args) { parses++; return marked.parse(...args); } } } });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Continue");
+  await f.wrapper.get("form").trigger("submit");
+  const content = "Long answer " + "word ".repeat(600);
+  emit({ type: "start", conversationId: "id", messages: [
+    ...Array.from({ length: 159 }, (_, i) => ({ role: "assistant", content: `Old answer ${i}` })),
+    { role: "assistant", content }
+  ] });
+  await vue.nextTick();
+  const before = parses;
+  for (let i = 0; i < 100; i++) {
+    emit({ type: "delta", index: 159, content: "next " });
+    await vue.nextTick();
+  }
+  assert.equal(parses - before, 1, "only one long Markdown parse per render interval");
+  t.mock.timers.tick(80);
+  await vue.nextTick();
+  assert.equal(parses - before, 2, "unchanged history must not be reparsed");
+  emit({ type: "delta", index: 159, content: "FINISHED" });
+  pending.resolve();
+  await flushPromises();
+  assert.equal(f.wrapper.findAll(".ai-message .ai-text").at(-1).text(), content + "next ".repeat(100) + "FINISHED");
+  assert.equal(parses - before, 3);
 });
 
 test("running chats allow live settings and queue follow-up input without aborting the stream", async (t) => {

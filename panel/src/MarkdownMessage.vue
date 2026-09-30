@@ -1,15 +1,41 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 
-const props = defineProps<{ content: string }>();
+const props = defineProps<{ content: string; streaming?: boolean }>();
+const emit = defineEmits<{ (event: "rendered"): void }>();
+const renderedContent = ref(props.content);
+let timer: ReturnType<typeof setTimeout> | undefined;
+
+function cancelPending() {
+  if (timer !== undefined) clearTimeout(timer);
+  timer = undefined;
+}
+
+function renderStreaming() {
+  renderedContent.value = props.content;
+  timer = setTimeout(() => {
+    timer = undefined;
+    if (renderedContent.value !== props.content) renderStreaming();
+  }, 80);
+}
+
+watch([() => props.content, () => props.streaming], () => {
+  // Short answers stay immediate. Long, unfinished answers must not repeatedly
+  // parse and sanitize the entire document at the provider's token rate.
+  if (!props.streaming || props.content.length < 2000) {
+    cancelPending();
+    renderedContent.value = props.content;
+  } else if (timer === undefined) renderStreaming();
+});
+onBeforeUnmount(cancelPending);
 const renderer = new marked.Renderer();
 // Literal HTML stays visible as text; only Markdown creates markup.
 renderer.html = (html) => html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const html = computed(() =>
   sanitizeHtml(
-    marked.parse(props.content, {
+    marked.parse(renderedContent.value, {
       renderer,
       gfm: true,
       breaks: true,
@@ -70,6 +96,7 @@ const html = computed(() =>
     }
   )
 );
+watch(html, () => emit("rendered"), { flush: "post" });
 </script>
 
 <template>

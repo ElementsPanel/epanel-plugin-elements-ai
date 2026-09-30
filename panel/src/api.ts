@@ -8,6 +8,7 @@ import type {
 } from "./types";
 import type { InstanceTarget, PermissionMode } from "./types";
 import { SseParser } from "./sse";
+import { batchStreamUpdates } from "./streamUpdates";
 import type { ChatPreferences } from "./preferences";
 
 export class AccountChangedError extends Error {}
@@ -132,6 +133,7 @@ export async function sendMessage(
   const decoder = new TextDecoder();
   const parser = new SseParser();
   let completed = false;
+  const updates = batchStreamUpdates(onEvent);
   const cancel = () => {
     void reader.cancel().catch(() => {});
   };
@@ -143,7 +145,7 @@ export async function sendMessage(
       for (const data of parser.push(decoder.decode(value, { stream: true }))) {
         const event = JSON.parse(data) as ChatEvent;
         if (event.type === "error") throw new Error(event.message);
-        onEvent(event);
+        updates.push(event);
         if (event.type === "done") {
           completed = true;
           break;
@@ -153,6 +155,8 @@ export async function sendMessage(
     }
     if (!completed || signal.aborted) throw new Error("Incomplete chat stream");
   } finally {
+    // Keep the final partial output on interruption and cancel the batch timer.
+    updates.flush();
     signal.removeEventListener("abort", cancel);
     await reader.cancel().catch(() => {});
     reader.releaseLock();

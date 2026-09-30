@@ -847,3 +847,37 @@ test("Koa streaming returns its body immediately and never buffers the entire ge
   await new Promise((resolve) => request.body.on("end", resolve));
   assert.match(chunks.join(""), /"done"/);
 });
+
+
+test("browser batches token bursts while preserving snapshots and control event order", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { batchStreamUpdates } = loader()(source + "streamUpdates.ts");
+  const events = [];
+  const updates = batchStreamUpdates(event => events.push(event));
+  for (let i = 0; i < 100; i++) updates.push({ type: "delta", index: 1, content: String(i) + "," });
+  assert.equal(events.length, 0);
+  t.mock.timers.tick(32);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].content, Array.from({ length: 100 }, (_, i) => i + ",").join(""));
+  for (let i = 0; i < 50; i++) updates.push({ type: "message", index: 2,
+    message: { role: "assistant", content: "", reasoning: "snapshot " + i } });
+  updates.push({ type: "message", index: 2,
+    message: { role: "assistant", content: "", reasoning: "snapshot 49", reasoningComplete: true } });
+  assert.equal(events.length, 3);
+  assert.equal(events[1].message.reasoning, "snapshot 49");
+  assert.equal(events[2].message.reasoningComplete, true);
+  updates.push({ type: "delta", index: 2, content: "partial" });
+  updates.push({ type: "retry", attempt: 1, maxAttempts: 3, delayMs: 1000 });
+  updates.push({ type: "message", index: 3, message: { role: "tool", content: "", pending: true } });
+  assert.deepEqual(events.slice(-3).map(event => event.type), ["delta", "retry", "message"]);
+  updates.push({ type: "delta", index: 4, content: "final" });
+  updates.push({ type: "done", conversationId: "id" });
+  assert.equal(events.at(-2).content, "final");
+  assert.equal(events.at(-1).type, "done");
+  const count = events.length;
+  t.mock.timers.tick(1000);
+  assert.equal(events.length, count, "completion clears queued timers");
+  updates.push({ type: "delta", index: 4, content: "interrupted" });
+  updates.flush();
+  assert.equal(events.at(-1).content, "interrupted");
+});
