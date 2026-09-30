@@ -714,7 +714,7 @@ test("reconnecting a partial stream replaces only that attempt and never replays
   assert.deepEqual(waits, [1000]);
   assert.deepEqual(
     events.find((item) => item.type === "retry"),
-    { type: "retry", attempt: 1, maxAttempts: 5, delayMs: 1000 }
+    { type: "retry", attempt: 1, maxAttempts: 5, delayMs: 1000, detail: "ERR_STREAM_PREMATURE_CLOSE" }
   );
   assert.ok(events.some((item) => item.type === "delta" && item.content === "DISCARD_PARTIAL"));
   const restored = events.filter((item) => item.type === "start").at(-1).messages;

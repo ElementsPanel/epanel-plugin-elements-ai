@@ -479,7 +479,7 @@ async function send() {
       current.signal,
       (event) => {
         if (version !== generation) return;
-        if (event.type !== "retry") retry.value = undefined;
+        if (!["retry", "download", "input"].includes(event.type)) retry.value = undefined;
         if (event.type === "start") {
           conversationId.value = event.conversationId;
           streamStarted.value = true;
@@ -948,9 +948,12 @@ onBeforeUnmount(() => reset(true));
               t(queued.failed ? "AI_REQUEST_FAILED" : "AI_MESSAGE_QUEUED")
             }}</small>
           </article>
-          <div v-if="loading && !activeReasoning" class="ai-working" role="status">
-            <span>{{ workingText }}</span>
-            <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
+          <div v-if="loading && !activeReasoning" role="status">
+            <div class="ai-working">
+              <span>{{ workingText }}</span>
+              <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
+            </div>
+            <div v-if="retry?.detail" class="ai-retry-detail">{{ retry.detail }}</div>
           </div>
         </div>
         <VBtn
@@ -1524,6 +1527,13 @@ onBeforeUnmount(() => reset(true));
   font-size: 13px;
   font-weight: 500;
   color: rgba(var(--v-theme-on-surface), 0.65);
+}
+.ai-retry-detail {
+  margin-top: 4px;
+  color: rgb(var(--v-theme-error));
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .ai-work-complete {
   width: fit-content;

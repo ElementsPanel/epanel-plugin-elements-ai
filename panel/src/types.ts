@@ -105,7 +105,7 @@ export type ChatEvent =
   | { type: "delta"; index: number; content: string }
   | { type: "download"; action: "upsert"; task: DownloadActivity }
   | { type: "download"; action: "remove"; id: string }
-  | { type: "retry"; attempt: number; maxAttempts: number; delayMs: number }
+  | { type: "retry"; attempt: number; maxAttempts: number; delayMs: number; detail?: string }
   | { type: "done"; conversationId: string }
   | { type: "error"; message: string };
 import type { ChatPreferences } from "./preferences";

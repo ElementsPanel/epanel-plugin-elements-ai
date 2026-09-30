@@ -978,7 +978,7 @@ export class ChatService {
                   message: { ...currentAssistant }
                 });
               },
-              onRetry: async (attempt, delayMs) => {
+              onRetry: async (attempt, delayMs, detail) => {
                 checkAttempt();
                 this.checkScope(tools, identity.uuid, scope);
                 // Replace only this failed generation's partial output. Completed
@@ -996,7 +996,8 @@ export class ChatService {
                   type: "retry",
                   attempt,
                   maxAttempts: MODEL_RETRY_DELAYS_MS.length,
-                  delayMs
+                  delayMs,
+                  detail
                 });
               }
             }

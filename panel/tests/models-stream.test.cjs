@@ -628,6 +628,77 @@ test("provider retries transient failures five times with increasing delays and 
   );
 });
 
+test("retry details include streamed API errors and redact the configured key", async () => {
+  const notices = [];
+  let attempts = 0;
+  let body;
+  const { complete } = loader({
+    axios: { post: async () => {
+      if (++attempts === 1) {
+        const bytes = Buffer.from(JSON.stringify({ error: { message: "请求过多; API key SECRET" } }));
+        body = Readable.from([bytes.subarray(0, 24), bytes.subarray(24)]);
+        throw { response: { status: 429, data: body } };
+      }
+      return { data: Readable.from([event({ content: "Recovered" }, "stop") + "data: [DONE]\n\n"]),
+        headers: { "content-type": "text/event-stream" } };
+    } },
+    "./retry": { waitForRetry: async () => {} }
+  })(source + "backend/provider.ts");
+  const result = await complete(model, [], [], new AbortController().signal, 400_000, async () => {}, undefined, {
+    onRetry: async (attempt, delay, detail) => notices.push({ attempt, delay, detail })
+  });
+  assert.equal(result.content, "Recovered");
+  assert.equal(attempts, 2);
+  assert.equal(body.destroyed, true);
+  assert.deepEqual(notices, [{ attempt: 1, delay: 1000, detail: "HTTP 429: 请求过多; API key [redacted]" }]);
+});
+
+test("provider errors preserve JSON, text and SSE messages with bounded redacted details", async () => {
+  for (const mode of ["http", "text", "json-success", "sse"]) {
+    const { complete } = loader({ axios: { post: async () => {
+      const message = "Unknown model; Authorization: Bearer SECRET";
+      const json = JSON.stringify({ error: { message } });
+      if (mode === "http" || mode === "text")
+        throw { response: { status: 400, data: Readable.from([mode === "text" ? message : json]) } };
+      return { data: Readable.from([mode === "sse" ? `data: ${json}\n\n` : json]),
+        headers: { "content-type": mode === "sse" ? "text/event-stream" : "application/json" } };
+    } } })(source + "backend/provider.ts");
+    await assert.rejects(complete(model, [], [], new AbortController().signal, 400_000, async () => {}),
+      (error) => {
+        assert.match(error.detail, /Unknown model/);
+        assert.doesNotMatch(error.detail, /SECRET/);
+        return true;
+      });
+  }
+  const { providerDetail } = loader()(source + "backend/provider.ts");
+  for (const data of [{ error: "Invalid key" }, { message: "Invalid key" },
+    { detail: "Invalid key" }, { error_description: "Invalid key" }])
+    assert.equal(providerDetail({ response: { status: 401, data } }), "HTTP 401: Invalid key");
+  const detail = providerDetail({ response: { status: 401, data: { message: 'api_key=hidden authorization: Bearer secret '+"x".repeat(1000) } } });
+  assert.doesNotMatch(detail, /hidden|secret/);
+  assert.equal(detail.length, 500);
+});
+
+test("error bodies are bounded and cancellation releases a stalled error response", async () => {
+  for (const stalled of [false, true]) {
+    const body = new PassThrough();
+    const controller = new AbortController();
+    let requests = 0;
+    const { complete } = loader({ axios: { post: async () => {
+      requests++;
+      throw { response: { status: 400, data: body } };
+    } } })(source + "backend/provider.ts");
+    const pending = complete(model, [], [], controller.signal, 400_000, async () => {});
+    const rejected = assert.rejects(pending, (error) => error.name === "ProviderError" && error.detail.length <= 500);
+    await tick();
+    if (stalled) controller.abort();
+    else body.write("x".repeat(64 * 1024));
+    await rejected;
+    assert.equal(body.destroyed, true);
+    assert.equal(requests, 1);
+  }
+});
+
 test("network, rate-limit and timeout retries can succeed while permanent errors fail immediately", async () => {
   for (const failure of [
     { code: "ECONNRESET" },

@@ -32,7 +32,7 @@ export class ProviderError extends Error {
   }
 }
 
-export function providerDetail(error: unknown): string {
+export function providerDetail(error: unknown, apiKey = ""): string {
   const value = error as {
     response?: { status?: number; data?: unknown };
     code?: string;
@@ -52,10 +52,60 @@ export function providerDetail(error: unknown): string {
         ? (nested as any).message
         : typeof body.message === "string"
         ? body.message
+        : typeof body.detail === "string"
+        ? body.detail
+        : typeof body.error_description === "string"
+        ? body.error_description
         : "";
   }
-  const base = remote || value?.code || value?.message || "Unknown provider error";
+  let base = remote || value?.code || value?.message || "Unknown provider error";
+  // Providers sometimes echo credentials in authentication errors. Never expose
+  // the configured key (including preset keys) or an echoed Authorization value.
+  if (apiKey) base = base.split(apiKey).join("[redacted]");
+  base = base
+    .replace(/(Bearer\s+)[^\s"'<>]+/gi, "$1[redacted]")
+    .replace(
+      /((?:api[_-]?key|access[_-]?token|authorization)["']?\s*[:=]\s*["']?)[^\s"'&,<>]+/gi,
+      "$1[redacted]"
+    );
   return `${status ? `HTTP ${status}: ` : ""}${base}`.slice(0, 500);
+}
+
+/** Axios uses a Readable for error responses too when responseType is stream. */
+async function readProviderError(error: unknown, signal: AbortSignal) {
+  const response = (error as { response?: { data?: unknown } } | null)?.response;
+  const body = response?.data as Readable | undefined;
+  if (!body || typeof body[Symbol.asyncIterator] !== "function") return;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const limit = 16 * 1024;
+  const stop = () => body.destroy();
+  const timer = setTimeout(stop, 2000);
+  signal.addEventListener("abort", stop, { once: true });
+  try {
+    if (signal.aborted) return;
+    for await (const chunk of body) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const part = bytes.subarray(0, limit - size);
+      chunks.push(part);
+      size += part.length;
+      if (size >= limit) break;
+    }
+  } catch {
+    // Keep any available error text if the response is truncated or disconnects.
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", stop);
+    body.destroy();
+    const text = Buffer.concat(chunks).toString("utf8").trim();
+    if (response) {
+      try {
+        response.data = JSON.parse(text);
+      } catch {
+        response.data = text;
+      }
+    }
+  }
 }
 
 export async function complete(
@@ -67,7 +117,7 @@ export async function complete(
   onDelta: (text: string) => Promise<void>,
   onToolRequest: (id: string, name: string) => Promise<void> = async () => {},
   hooks: {
-    onRetry?: (attempt: number, delayMs: number) => Promise<void>;
+    onRetry?: (attempt: number, delayMs: number, detail: string) => Promise<void>;
     beforeAttempt?: () => Promise<void>;
     onReasoning?: (text: string) => Promise<void>;
   } = {}
@@ -91,13 +141,13 @@ export async function complete(
       );
     } catch (error) {
       if (signal.aborted || attempt >= MODEL_RETRY_DELAYS_MS.length || !retryable(error))
-        throw new ProviderError("AI provider request failed", providerDetail(error));
+        throw new ProviderError("AI provider request failed", providerDetail(error, model.apiKey));
       const delayMs = MODEL_RETRY_DELAYS_MS[attempt];
       if (Date.now() + delayMs >= deadline)
-        throw new ProviderError("AI provider request failed", providerDetail(error));
+        throw new ProviderError("AI provider request failed", providerDetail(error, model.apiKey));
       // Retry only this generation, with the same completed tool receipts.
       // No tool from an incomplete response has been executed by ChatService.
-      await hooks.onRetry?.(attempt + 1, delayMs);
+      await hooks.onRetry?.(attempt + 1, delayMs, providerDetail(error, model.apiKey));
       await waitForRetry(delayMs, signal);
     }
   }
@@ -183,7 +233,9 @@ async function completeOnce(
     );
     stream = response.data;
     if (!String(response.headers["content-type"]).includes("text/event-stream"))
-      throw new Error("Expected an event stream");
+      throw Object.assign(new Error("Expected an event stream"), {
+        response: { status: response.status, data: stream }
+      });
     const parser = new SseParser();
     const decoder = new StringDecoder("utf8");
     const calls = new Map<number, ToolCall>();
@@ -205,7 +257,9 @@ async function completeOnce(
           break;
         }
         const packet = JSON.parse(data);
-        if (packet.error || !Array.isArray(packet.choices)) throw new Error("Invalid model stream");
+        if (packet.error)
+          throw Object.assign(new Error("Model stream error"), { response: { data: packet } });
+        if (!Array.isArray(packet.choices)) throw new Error("Invalid model stream");
         const choice = packet.choices.find((item: { index: number }) => item.index === 0);
         if (!choice) continue; // Usage-only chunks have no choices.
         if (finished) throw new Error("Content after completion");
@@ -302,6 +356,7 @@ async function completeOnce(
       ...(toolCalls.length ? { tool_calls: toolCalls } : {})
     };
   } catch (error) {
+    await readProviderError(error, controller.signal);
     (error as { response?: { data?: { destroy?: () => void } } })?.response?.data?.destroy?.();
     if (timedOut && !signal.aborted)
       throw Object.assign(new Error("Model request timed out"), { code: "ETIMEDOUT" });
