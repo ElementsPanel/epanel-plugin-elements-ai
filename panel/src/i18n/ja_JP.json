@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "無効の場合は Ctrl+Enter または ⌘+Enter で送信します。",
   "AI_SAVE_SETTINGS": "設定を保存",
   "AI_TOOL_ask_user": "ユーザーに質問",
+  "AI_TOOL_wait_terminal_update": "ターミナル出力の更新を待機",
   "AI_TOOL_read_terminal": "ターミナル出力を読む",
   "AI_TOOL_execute_node_command": "ノードのターミナルコマンドを実行",
   "AI_TOOL_list_msl_servers": "MSLミラー: サーバーソフトウェアを一覧表示",

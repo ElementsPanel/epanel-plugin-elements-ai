@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "Si se desactiva, envía con Ctrl+Enter o ⌘+Enter.",
   "AI_SAVE_SETTINGS": "Guardar ajustes",
   "AI_TOOL_ask_user": "Preguntar al usuario",
+  "AI_TOOL_wait_terminal_update": "Esperar nueva salida del terminal",
   "AI_TOOL_read_terminal": "Leer salida del terminal",
   "AI_TOOL_execute_node_command": "Ejecutar comando de terminal del nodo",
   "AI_TOOL_list_msl_servers": "Espejo MSL: Listar software de servidor",

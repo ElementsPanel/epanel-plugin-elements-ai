@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "Kapalıyken Ctrl+Enter veya ⌘+Enter ile gönderin.",
   "AI_SAVE_SETTINGS": "Ayarları kaydet",
   "AI_TOOL_ask_user": "Kullanıcıya sor",
+  "AI_TOOL_wait_terminal_update": "Terminal çıktısının güncellenmesini bekle",
   "AI_TOOL_read_terminal": "Terminal çıktısını oku",
   "AI_TOOL_execute_node_command": "Düğüm terminal komutunu çalıştır",
   "AI_TOOL_list_msl_servers": "MSL yansısı: Sunucu yazılımlarını listele",

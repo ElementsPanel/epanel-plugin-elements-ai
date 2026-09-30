@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "When disabled, send with Ctrl+Enter or ⌘+Enter.",
   "AI_SAVE_SETTINGS": "Save settings",
   "AI_TOOL_ask_user": "Ask the user",
+  "AI_TOOL_wait_terminal_update": "Wait for terminal output updates",
   "AI_TOOL_read_terminal": "Read terminal output",
   "AI_TOOL_execute_node_command": "Execute node terminal command",
   "AI_TOOL_list_msl_servers": "MSL mirror: List server software",

@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "เมื่อปิด ให้ส่งด้วย Ctrl+Enter หรือ ⌘+Enter",
   "AI_SAVE_SETTINGS": "บันทึกการตั้งค่า",
   "AI_TOOL_ask_user": "ถามผู้ใช้",
+  "AI_TOOL_wait_terminal_update": "รอการอัปเดตเอาต์พุตเทอร์มินัล",
   "AI_TOOL_read_terminal": "อ่านเอาต์พุตเทอร์มินัล",
   "AI_TOOL_execute_node_command": "เรียกใช้คำสั่งเทอร์มินัลของโหนด",
   "AI_TOOL_list_msl_servers": "มิเรอร์ MSL: แสดงรายการซอฟต์แวร์เซิร์ฟเวอร์",

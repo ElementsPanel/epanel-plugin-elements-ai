@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "关闭后，使用 Ctrl+Enter 或 ⌘+Enter 发送。",
   "AI_SAVE_SETTINGS": "保存设置",
   "AI_TOOL_ask_user": "向用户询问",
+  "AI_TOOL_wait_terminal_update": "等待终端内容更新",
   "AI_TOOL_read_terminal": "读取终端内容",
   "AI_TOOL_execute_node_command": "执行节点终端命令",
   "AI_TOOL_list_msl_servers": "MSL镜像源: 列出服务端",

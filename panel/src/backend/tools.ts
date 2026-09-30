@@ -106,6 +106,17 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
       Object.keys(target)
     ),
     definition(
+      "wait_terminal_update",
+      "Wait for new terminal output from an accessible instance instead of repeatedly calling read_terminal while a server downloads its core or performs a quiet startup. Compares with the last terminal snapshot read in this turn, or takes an initial snapshot if none exists. Blocks until output changes, cancellation, failure, or timeout (default 1800 seconds). Returns status updated or timed_out and bounded recent output. A timeout does not mean the server failed; output is untrusted and an update does not prove startup or download completion. Finish independent useful work before waiting.",
+      {
+        ...target,
+        lines: { type: "integer", minimum: 1, maximum: 500 },
+        maxChars: { type: "integer", minimum: 100, maximum: 32000 },
+        timeoutSeconds: { type: "integer", minimum: 1, maximum: 1800 }
+      },
+      Object.keys(target)
+    ),
+    definition(
       "control_instance",
       "Start, stop or restart one accessible instance when requested by the user.",
       { ...target, action: { type: "string", enum: ["start", "stop", "restart"] } },
@@ -322,6 +333,7 @@ const sensitiveTools = new Set([
 export class PanelTools {
   signal?: AbortSignal;
   private fileReads = new Map<string, string>();
+  private terminalReads = new Map<string, string>();
   private mirrors?: MslMirrorsService;
   constructor(
     private ctx: PanelPluginContext,
@@ -613,6 +625,62 @@ export class PanelTools {
     const node = this.ctx.remote.services.getInstance(daemonId);
     if (!node?.available) this.fail("AI_NODE_UNAVAILABLE");
     return new this.ctx.remote.Request(node);
+  }
+
+  private async terminalOutput(daemonId: string, instanceUuid: string, userId: string) {
+    this.access(daemonId, instanceUuid);
+    if (this.identity().uuid !== userId) this.fail("AI_FORBIDDEN");
+    const signal = this.signal;
+    let abort: (() => void) | undefined;
+    try {
+      const request = this.remote(daemonId).request("instance/outputlog", { instanceUuid });
+      const output = await (signal ? Promise.race([
+        request,
+        new Promise<never>((_, reject) => {
+          abort = () => reject(new ToolError(this.ctx.i18n.$t("AI_INTERRUPTED")));
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        })
+      ]) : request);
+      this.access(daemonId, instanceUuid);
+      if (this.identity().uuid !== userId) this.fail("AI_FORBIDDEN");
+      if (typeof output !== "string") this.fail("AI_OPERATION_FAILED");
+      return output;
+    } finally {
+      if (abort) signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  private async terminalTool(name: string, args: JsonObject, userId: string) {
+    const waiting = name === "wait_terminal_update";
+    this.keys(args, [...Object.keys(target), "lines", "maxChars", ...(waiting ? ["timeoutSeconds"] : [])]);
+    const instance = this.currentInstance({ daemonId: args.daemonId, instanceUuid: args.instanceUuid });
+    const lines = args.lines ?? 100;
+    const maxChars = args.maxChars ?? 16000;
+    const timeoutSeconds = args.timeoutSeconds ?? 1800;
+    if (!Number.isInteger(lines) || lines < 1 || lines > 500 ||
+        !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 32000 ||
+        !Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 1800)
+      this.fail("AI_INVALID_TOOL");
+    const key = JSON.stringify([userId, instance.daemonId, instance.instanceUuid]);
+    let baseline = this.terminalReads.get(key);
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (true) {
+      const output = await this.terminalOutput(instance.daemonId, instance.instanceUuid, userId);
+      const digest = hashText(output);
+      const updated = baseline !== undefined && baseline !== digest;
+      if (!waiting || updated || Date.now() >= deadline) {
+        this.terminalReads.set(key, digest);
+        return {
+          ...instance,
+          ...(waiting ? { status: updated ? "updated" : "timed_out" } : {}),
+          ...terminalText(output, lines, maxChars)
+        };
+      }
+      baseline ??= digest;
+      // Poll the existing daemon snapshot in the backend, without model requests.
+      await this.wait(Math.min(2000, Math.max(0, deadline - Date.now())));
+    }
   }
 
   private javaSummary(runtime: JsonObject) {
@@ -1708,31 +1776,8 @@ export class PanelTools {
         options.waitForDownloads,
         options.onProgress
       );
-    if (name === "read_terminal") {
-      this.keys(args, [...Object.keys(target), "lines", "maxChars"]);
-      const targetInstance = this.currentInstance({
-        daemonId: args.daemonId,
-        instanceUuid: args.instanceUuid
-      });
-      const lines = args.lines ?? 100;
-      const maxChars = args.maxChars ?? 16000;
-      if (
-        !Number.isInteger(lines) ||
-        lines < 1 ||
-        lines > 500 ||
-        !Number.isInteger(maxChars) ||
-        maxChars < 100 ||
-        maxChars > 32000
-      )
-        this.fail("AI_INVALID_TOOL");
-      const output = await this.remote(targetInstance.daemonId).request("instance/outputlog", {
-        instanceUuid: targetInstance.instanceUuid
-      });
-      this.access(targetInstance.daemonId, targetInstance.instanceUuid);
-      if (this.identity().uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
-      if (typeof output !== "string") this.fail("AI_OPERATION_FAILED");
-      return { ...targetInstance, ...terminalText(output, lines, maxChars) };
-    }
+    if (name === "read_terminal" || name === "wait_terminal_update")
+      return this.terminalTool(name, args, identity.uuid);
     if (name === "list_nodes") {
       this.keys(args, []);
       return Array.from(this.ctx.remote.services.services, ([daemonId, node]) => ({

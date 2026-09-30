@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "끄면 Ctrl+Enter 또는 ⌘+Enter로 전송합니다.",
   "AI_SAVE_SETTINGS": "설정 저장",
   "AI_TOOL_ask_user": "사용자에게 질문",
+  "AI_TOOL_wait_terminal_update": "터미널 출력 업데이트 대기",
   "AI_TOOL_read_terminal": "터미널 출력 읽기",
   "AI_TOOL_execute_node_command": "노드 터미널 명령 실행",
   "AI_TOOL_list_msl_servers": "MSL 미러: 서버 소프트웨어 목록 조회",

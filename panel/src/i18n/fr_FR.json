@@ -99,6 +99,7 @@
   "AI_SEND_ON_ENTER_HELP": "Si désactivé, utilisez Ctrl+Entrée ou ⌘+Entrée.",
   "AI_SAVE_SETTINGS": "Enregistrer les paramètres",
   "AI_TOOL_ask_user": "Poser une question à l’utilisateur",
+  "AI_TOOL_wait_terminal_update": "Attendre une nouvelle sortie du terminal",
   "AI_TOOL_read_terminal": "Lire la sortie du terminal",
   "AI_TOOL_execute_node_command": "Exécuter une commande terminal sur le nœud",
   "AI_TOOL_list_msl_servers": "Miroir MSL: Lister les logiciels serveur",

@@ -1288,6 +1288,123 @@ test("terminal snapshots are bounded, strip controls and enforce ownership befor
   await assert.rejects(f.tools().execute("read_terminal", own), /AI_FORBIDDEN/);
 });
 
+test("terminal wait uses the last snapshot and returns bounded fresh output", async () => {
+  const f = fixture();
+  const tools = f.tools();
+  let output = "downloading";
+  f.remote(async () => output);
+  await tools.execute("read_terminal", own);
+  const sleeping = deferred();
+  const resume = deferred();
+  f.ctx.sleep = async (ms) => { assert.equal(ms, 2000); sleeping.resolve(); await resume.promise; };
+  let finished = false;
+  const pending = tools.execute("wait_terminal_update", { ...own, lines: 1, maxChars: 100 })
+    .then((result) => { finished = true; return result; });
+  await sleeping.promise;
+  assert.equal(finished, false);
+  assert.equal(f.calls.length, 2);
+  output += "\n\x1b[32mReady\x1b[0m";
+  resume.resolve();
+  const result = await pending;
+  assert.equal(result.status, "updated");
+  assert.equal(result.content, "Ready");
+  assert.equal(result.truncated, true);
+  output += "\nNext update";
+  assert.equal((await tools.execute("wait_terminal_update", own)).status, "updated",
+    "output between consecutive calls must not be missed");
+});
+
+test("terminal wait establishes a baseline without a prior read and reports timeout honestly", async (t) => {
+  const f = fixture();
+  let now = 0;
+  t.mock.method(Date, "now", () => now);
+  f.ctx.sleep = async (ms) => { now += ms; };
+  f.remote(async () => "unchanged");
+  const result = await f.tools().execute("wait_terminal_update", { ...own, timeoutSeconds: 5 });
+  assert.equal(result.status, "timed_out");
+  assert.equal(result.content, "unchanged");
+  assert.equal(now, 5000);
+  assert.equal(f.calls.length, 4);
+});
+
+test("terminal wait isolates instances and rechecks revoked access and offline nodes", async () => {
+  for (const cause of ["permission", "account", "offline"]) {
+    const f = fixture();
+    const tools = f.tools();
+    f.remote(async () => "unchanged");
+    f.ctx.sleep = async () => {
+      if (cause === "permission") f.users.get("alice").instances = [];
+      if (cause === "account") f.users.delete("alice");
+      if (cause === "offline") f.nodes.get("node-a").available = false;
+    };
+    await assert.rejects(tools.execute("wait_terminal_update", own), /AI_FORBIDDEN|AI_NODE_UNAVAILABLE/);
+    assert.equal(f.calls.length, 1);
+  }
+  const f = fixture();
+  await assert.rejects(f.tools().execute("wait_terminal_update", { ...own, daemonId: "node-b" }), /AI_FORBIDDEN/);
+  assert.equal(f.calls.length, 0);
+  f.remote(async () => { f.users.get("alice").instances = []; return "PRIVATE"; });
+  await assert.rejects(f.tools().execute("wait_terminal_update", own), /AI_FORBIDDEN/);
+});
+
+test("terminal wait cancellation interrupts both sleep and an outstanding snapshot request", async () => {
+  for (const duringRead of [false, true]) {
+    const f = fixture();
+    const tools = f.tools();
+    const controller = new AbortController();
+    tools.signal = controller.signal;
+    const started = deferred();
+    const delayed = deferred();
+    f.remote(async () => {
+      if (duringRead) { started.resolve(); return delayed.promise; }
+      return "unchanged";
+    });
+    f.ctx.sleep = () => { started.resolve(); return delayed.promise; };
+    const pending = tools.execute("wait_terminal_update", own);
+    await started.promise;
+    controller.abort();
+    await assert.rejects(pending, /AI_INTERRUPTED/);
+    delayed.resolve("late output");
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test("terminal wait validates limits and propagates failed snapshot reads", async () => {
+  const f = fixture();
+  for (const args of [{ timeoutSeconds: 0 }, { timeoutSeconds: 1801 }, { timeoutSeconds: 1.5 },
+    { lines: 501 }, { maxChars: 99 }, { command: "stop" }])
+    await assert.rejects(f.tools().execute("wait_terminal_update", { ...own, ...args }), /AI_INVALID_TOOL/);
+  assert.equal(f.calls.length, 0);
+  f.remote(async () => null);
+  await assert.rejects(f.tools().execute("wait_terminal_update", own), /AI_OPERATION_FAILED/);
+  f.remote(async () => { throw new Error("node disconnected"); });
+  await assert.rejects(f.tools().execute("wait_terminal_update", own), /node disconnected/);
+});
+
+test("chat does not call the model again while terminal output is unchanged", async () => {
+  let requests = 0;
+  let output = "downloading";
+  const sleeping = deferred();
+  const resume = deferred();
+  const f = fixture({ completion: async (_config, messages, definitions) => {
+    requests++;
+    assert.ok(definitions.some((tool) => tool.function.name === "wait_terminal_update"));
+    if (requests === 1) return call("wait_terminal_update", own);
+    assert.match(messages.findLast((message) => message.role === "tool").content, /updated/);
+    return answer("Terminal updated");
+  } });
+  f.remote(async () => output);
+  f.ctx.sleep = async () => { sleeping.resolve(); await resume.promise; };
+  const pending = f.chat.chat(f.request({ message: "Wait for the server output" }));
+  await sleeping.promise;
+  assert.equal(requests, 1);
+  output += "\nReady";
+  resume.resolve();
+  const result = await pending;
+  assert.equal(requests, 2);
+  assert.equal(result.messages.at(-1).content, "Terminal updated");
+});
+
 test("chat validates the current instance context before forwarding it to a model", async () => {
   let seen;
   const f = fixture({

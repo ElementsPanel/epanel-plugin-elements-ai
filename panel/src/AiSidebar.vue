@@ -173,6 +173,7 @@ const toolIcons: Record<string, string> = {
   download_mod_batch: "mdi-download-multiple",
   get_mod_download_status: "mdi-cloud-check-outline",
   read_terminal: "mdi-console-line",
+  wait_terminal_update: "mdi-console-line",
   execute_node_command: "mdi-console-network-outline",
   list_msl_servers: "mdi-server",
   list_msl_versions: "mdi-format-list-numbered",
