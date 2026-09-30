@@ -2,13 +2,14 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const Module = require("node:module");
-const { test } = require("node:test");
+const { test, beforeEach } = require("node:test");
 const root = path.resolve(__dirname, "../../../..");
 const frontendRequire = Module.createRequire(path.join(root, "frontend/package.json"));
 const { JSDOM } = frontendRequire("jsdom");
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "https://panel.example/prefix/"
 });
+beforeEach(() => dom.window.localStorage.clear());
 for (const key of [
   "window",
   "document",
@@ -330,7 +331,58 @@ test("character count stays inside the rounded input box", async () => {
   f.wrapper.unmount();
 });
 
-test("permission selector precedes models, defaults safely and resets on logout", async (t) => {
+test("chat selections survive remounts and logout without leaking across accounts", async (t) => {
+  let userId = "alice";
+  let models = ["first", "second"];
+  const api = { getStatus: async () => ({ ready: true, admin: true, userId,
+    models: models.map((id) => ({ id, name: id, model: id, source: "preset" })) }) };
+  const fixtures = [];
+  t.after(() => fixtures.forEach((f) => f.wrapper.unmount()));
+  const open = async () => {
+    const f = sidebar(api);
+    fixtures.push(f);
+    f.state.open = true;
+    await flushPromises();
+    return f;
+  };
+  const model = (f) => f.wrapper.get('[aria-label="AI_SELECT_MODEL"]');
+  const permission = (f) => f.wrapper.get('[aria-label="AI_PERMISSION_MODE"]');
+  const first = await open();
+  await model(first).setValue("second");
+  await permission(first).setValue("full");
+  first.route.path = "/login";
+  await flushPromises();
+  const restored = await open();
+  assert.equal(model(restored).element.value, "second");
+  assert.equal(permission(restored).element.value, "full");
+  userId = "bob";
+  restored.state.open = false;
+  await vue.nextTick();
+  restored.state.open = true;
+  await flushPromises();
+  assert.equal(model(restored).element.value, "first");
+  assert.equal(permission(restored).element.value, "default");
+  userId = "alice";
+  models = ["first"];
+  const fallback = await open();
+  assert.equal(model(fallback).element.value, "first");
+  assert.equal(permission(fallback).element.value, "full");
+});
+
+test("malformed local chat settings recover on the next selection", async (t) => {
+  const key = "epanel-plugin-elements-ai:chat-settings:alice";
+  window.localStorage.setItem(key, "broken json");
+  const f = sidebar();
+  t.after(() => f.wrapper.unmount());
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get('[aria-label="AI_PERMISSION_MODE"]').setValue("full");
+  assert.deepEqual(JSON.parse(window.localStorage.getItem(key)), {
+    modelId: "preset:default", permissionMode: "full"
+  });
+});
+
+test("permission selector precedes models and remembers the choice after logging back in", async (t) => {
   const f = sidebar();
   t.after(() => f.wrapper.unmount());
   f.state.open = true;
@@ -354,10 +406,11 @@ test("permission selector precedes models, defaults safely and resets on logout"
   assert.equal(f.calls[1][7], "full");
   f.route.path = "/login";
   await vue.nextTick();
+  assert.equal(f.state.open, false);
   f.route.path = "/instances";
   f.state.open = true;
   await flushPromises();
-  assert.equal(selector().element.value, "default");
+  assert.equal(selector().element.value, "full");
 });
 
 test("chat approvals show exact arguments, submit the user's decision and disappear after settlement", async (t) => {

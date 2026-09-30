@@ -47,6 +47,41 @@ const status = ref<AiStatus>();
 const preferences = computed(() => status.value?.preferences || defaultPreferences());
 const selectedModel = ref("");
 const permissionMode = ref<PermissionMode>("default");
+const chatSettingsKey = (userId: string) =>
+  `epanel-plugin-elements-ai:chat-settings:${encodeURIComponent(userId)}`;
+
+function restoreChatSettings(userId: string) {
+  selectedModel.value = "";
+  permissionMode.value = "default";
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(chatSettingsKey(userId)) || "null");
+    if (typeof saved?.modelId === "string") selectedModel.value = saved.modelId;
+    if (saved?.permissionMode === "full") permissionMode.value = "full";
+  } catch {
+    // Invalid or unavailable storage must not prevent chatting.
+  }
+}
+
+function persistChatSettings() {
+  const current = status.value;
+  if (!current?.userId) return;
+  try {
+    const key = chatSettingsKey(current.userId);
+    let saved: { modelId?: unknown } | null = null;
+    try {
+      saved = JSON.parse(window.localStorage.getItem(key) || "null");
+    } catch {
+      // Replace malformed settings on the next selection change.
+    }
+    // An unavailable historical model should not replace the last usable choice.
+    const modelId = current.models.some((model) => model.id === selectedModel.value)
+      ? selectedModel.value
+      : typeof saved?.modelId === "string" ? saved.modelId : "";
+    window.localStorage.setItem(key, JSON.stringify({ modelId, permissionMode: permissionMode.value }));
+  } catch {
+    // Storage may be disabled or full; retain the in-memory selection.
+  }
+}
 const permissionOptions = computed(() => [
   { title: t("AI_PERMISSION_DEFAULT"), value: "default" },
   { title: t("AI_PERMISSION_FULL"), value: "full" }
@@ -353,6 +388,7 @@ async function refreshStatus() {
     const value = await getStatus(current.signal);
     if (current.signal.aborted || version !== generation) return;
     if (status.value && status.value.userId !== value.userId) accountChanged();
+    if (status.value?.userId !== value.userId) restoreChatSettings(value.userId);
     status.value = value;
     if (!messages.value.length && !conversationId.value) selectedModel.value = preferredModel();
     if (!value.models.some((model) => model.id === selectedModel.value)) {
@@ -633,7 +669,10 @@ function syncSettings(refresh = false) {
   });
 }
 
-watch([selectedModel, permissionMode], () => syncSettings());
+watch([selectedModel, permissionMode], () => {
+  persistChatSettings();
+  syncSettings();
+});
 
 async function modelsChanged() {
   if (!loading.value) reset();
