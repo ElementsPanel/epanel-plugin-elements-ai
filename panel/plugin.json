@@ -2,7 +2,7 @@
   "id": "epanel-plugin-elements-ai",
   "name": "Elements AI",
   "displayName": "Elements AI",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "让 Agent 接管面板。",
   "category": "tools",
   "priority": 100,
