@@ -1219,6 +1219,54 @@ test("streaming follows the conversation only while the user remains near the bo
   assert.ok(scrolls > 0);
 });
 
+test("sending while scrolled up forces the latest message into view and exposes a bottom button", async (t) => {
+  const pending = deferred();
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      onEvent({
+        type: "start",
+        conversationId: "a".repeat(32),
+        messages: [{ role: "user", content: "Jump to the bottom" }]
+      });
+      await pending.promise;
+    }
+  });
+  t.after(() => {
+    pending.resolve();
+    f.wrapper.unmount();
+  });
+  f.state.open = true;
+  await flushPromises();
+  const messages = f.wrapper.get(".ai-messages");
+  const element = messages.element;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, value: 1000 },
+    clientHeight: { configurable: true, value: 200 },
+    scrollTop: { configurable: true, writable: true, value: 200 }
+  });
+  let scrolls = 0;
+  element.scrollTo = ({ top }) => {
+    scrolls++;
+    element.scrollTop = top;
+  };
+  await messages.trigger("scroll");
+  await vue.nextTick();
+  assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), true);
+  assert.ok(f.wrapper.html().indexOf("ai-downloads") < f.wrapper.html().indexOf("ai-scroll-bottom") ||
+    !f.wrapper.find(".ai-downloads").exists());
+  await f.wrapper.get(".ai-scroll-bottom").trigger("click");
+  paint();
+  await vue.nextTick();
+  assert.equal(scrolls, 1);
+  assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), false);
+
+  await f.wrapper.get("textarea").setValue("Jump to the bottom");
+  await f.wrapper.get("form").trigger("submit");
+  await vue.nextTick();
+  paint();
+  assert.ok(scrolls >= 2);
+});
+
 test("multiple download tasks use a layered card stack while collapsed", async (t) => {
   const pending = deferred();
   let emit;
@@ -1268,6 +1316,34 @@ test("multiple download tasks use a layered card stack while collapsed", async (
   await vue.nextTick();
   assert.equal(f.wrapper.get(".ai-download-toggle").attributes("aria-expanded"), "false");
   assert.equal(f.wrapper.findAll(".ai-download-stack-card").length, 3);
+});
+
+test("a single download task has no separator above its progress card", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      emit = onEvent;
+      await pending.promise;
+    }
+  });
+  t.after(() => {
+    pending.resolve();
+    f.wrapper.unmount();
+  });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Download one item");
+  await f.wrapper.get("form").trigger("submit");
+  emit({
+    type: "download",
+    action: "upsert",
+    task: { id: "one", tool: "download_mod", state: "running", progress: {} }
+  });
+  await vue.nextTick();
+  assert.deepEqual(f.wrapper.get(".ai-downloads").classes(), ["ai-downloads", "ai-downloads--single"]);
+  assert.ok(f.wrapper.html().indexOf("ai-downloads") < f.wrapper.html().indexOf("ai-scroll-bottom") ||
+    !f.wrapper.find(".ai-scroll-bottom").exists());
 });
 
 test("leaving an account cancels preference saves and ignores their late completion", async () => {

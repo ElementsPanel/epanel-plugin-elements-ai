@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import {
   VAlert,
   VBtn,
@@ -13,15 +13,21 @@ import {
   VSelect,
   VTextarea
 } from "vuetify/components";
+import ConversationHistory from "./ConversationHistory.vue";
+import FileDiffView from "./FileDiff.vue";
+import MarkdownMessage from "./MarkdownMessage.vue";
+import SidebarSettings from "./SidebarSettings.vue";
 import {
   AccountChangedError,
+  enqueueChatMessage,
   getStatus,
   respondToApproval,
   respondToQuestion,
   sendMessage,
-  updateChatSettings,
-  enqueueChatMessage
+  updateChatSettings
 } from "./api";
+import { defaultPreferences, type ChatPreferences } from "./preferences";
+import { CLIENT_CHAT_TIMEOUT_MS } from "./timing";
 import type {
   AiStatus,
   ChatEvent,
@@ -31,12 +37,6 @@ import type {
   PermissionMode,
   ToolProgress
 } from "./types";
-import ConversationHistory from "./ConversationHistory.vue";
-import FileDiffView from "./FileDiff.vue";
-import MarkdownMessage from "./MarkdownMessage.vue";
-import SidebarSettings from "./SidebarSettings.vue";
-import { defaultPreferences, type ChatPreferences } from "./preferences";
-import { CLIENT_CHAT_TIMEOUT_MS } from "./timing";
 
 const props = defineProps<{ state: { open: boolean } }>();
 const { t, locale } = useI18n();
@@ -108,6 +108,7 @@ const list = ref<HTMLElement>();
 const input = ref<InstanceType<typeof VTextarea>>();
 const AUTO_SCROLL_THRESHOLD = 48;
 let autoScrollEnabled = true;
+const showScrollBottom = ref(false);
 let scrollFrame: number | undefined;
 let forceScroll = false;
 let controller: AbortController | undefined;
@@ -260,6 +261,7 @@ function reset(shouldClearDownloads = false) {
   canContinue.value = true;
   historyModelName.value = "";
   autoScrollEnabled = true;
+  showScrollBottom.value = false;
 }
 
 function newChat() {
@@ -308,6 +310,7 @@ function listScrolled() {
   if (!element) return;
   autoScrollEnabled =
     element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_THRESHOLD;
+  showScrollBottom.value = !autoScrollEnabled;
 }
 
 function cancelScroll() {
@@ -331,6 +334,7 @@ function scroll(force = false) {
     if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
     autoScrollEnabled = true;
+    showScrollBottom.value = false;
   });
 }
 
@@ -385,7 +389,7 @@ async function queueMessage(content: string) {
   const queued = { id: crypto.randomUUID().replace(/-/g, ""), content, failed: false };
   queuedMessages.value.push(queued);
   draft.value = "";
-  void scroll();
+  void scroll(true);
   const version = generation;
   inputQueue = inputQueue.then(async () => {
     if (version !== generation) return;
@@ -422,7 +426,7 @@ async function send() {
   error.value = "";
   draft.value = "";
   messages.value.push({ role: "user", content });
-  void scroll();
+  void scroll(true);
   const timeout = window.setTimeout(() => current.abort(), CLIENT_CHAT_TIMEOUT_MS);
   try {
     await sendMessage(
@@ -912,7 +916,10 @@ onBeforeUnmount(() => reset(true));
           <div
             v-if="downloads.length"
             class="ai-downloads"
-            :class="{ 'ai-downloads--multiple': downloadsMultiple }"
+            :class="{
+              'ai-downloads--multiple': downloadsMultiple,
+              'ai-downloads--single': !downloadsMultiple
+            }"
             role="status"
             aria-live="polite"
             @mouseleave="collapseDownloads"
@@ -977,6 +984,17 @@ onBeforeUnmount(() => reset(true));
             </Transition>
           </div>
         </Transition>
+        <VBtn
+          v-if="showScrollBottom"
+          class="ai-scroll-bottom"
+          icon="mdi-chevron-down"
+          size="small"
+          variant="flat"
+          color="primary"
+          :title="t('AI_SCROLL_BOTTOM')"
+          :aria-label="t('AI_SCROLL_BOTTOM')"
+          @click="scroll(true)"
+        />
         <form class="ai-composer" @submit.prevent="send">
           <VAlert
             v-if="!canContinue"
@@ -1144,13 +1162,20 @@ onBeforeUnmount(() => reset(true));
   display: grid;
   gap: 8px;
   padding: 10px 20px;
-  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 .ai-downloads--multiple {
   margin: 8px 20px 0;
   padding: 0;
   border: 0;
   background: transparent;
+}
+.ai-scroll-bottom {
+  align-self: flex-end;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  margin: 8px 20px 0;
+  border-radius: 50%;
 }
 .ai-download-toggle {
   display: block;

@@ -146,5 +146,6 @@
   "AI_APPROVAL_EXPIRED": "이 승인은 만료되었거나 사용할 수 없습니다. 채팅의 최신 상태를 확인하세요.",
   "AI_QUESTION_EXPIRED": "이 질문은 만료되었거나 사용할 수 없습니다. 채팅의 최신 상태를 확인하세요.",
   "AI_OPERATION_DENIED": "사용자가 이 작업을 거부했습니다. 아무것도 실행되지 않았습니다. 재시도하거나 이 결정을 우회하지 마세요.",
-  "AI_MESSAGE_QUEUED": "다음 도구 호출 전에 전송됩니다"
+  "AI_MESSAGE_QUEUED": "다음 도구 호출 전에 전송됩니다",
+  "AI_SCROLL_BOTTOM": "최신 메시지로 스크롤"
 }

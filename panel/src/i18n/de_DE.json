@@ -146,5 +146,6 @@
   "AI_APPROVAL_EXPIRED": "Diese Bestätigung ist abgelaufen oder nicht verfügbar. Prüfe den aktuellen Chatstatus.",
   "AI_QUESTION_EXPIRED": "Diese Frage ist abgelaufen oder nicht mehr verfügbar. Prüfe den aktuellen Chatstatus.",
   "AI_OPERATION_DENIED": "Der Benutzer hat diese Aktion abgelehnt. Nichts wurde ausgeführt. Nicht erneut versuchen oder diese Entscheidung umgehen.",
-  "AI_MESSAGE_QUEUED": "Wird vor dem nächsten Werkzeugaufruf gesendet"
+  "AI_MESSAGE_QUEUED": "Wird vor dem nächsten Werkzeugaufruf gesendet",
+  "AI_SCROLL_BOTTOM": "Zu den neuesten Nachrichten scrollen"
 }
