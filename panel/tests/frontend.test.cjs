@@ -1882,7 +1882,7 @@ test("selecting a different model preserves the current conversation", async () 
   assert.equal(f.wrapper.get('option[value="preset:default"]').text(), "Shared");
   assert.equal(
     f.wrapper.get('option[value="personal:mine"]').text(),
-    "Private · AI_PERSONAL_MODEL"
+    "Private"
   );
   await f.wrapper.get("textarea").setValue("FIRST CHAT");
   await f.wrapper.get("form").trigger("submit");

@@ -92,7 +92,7 @@ const canContinue = ref(true);
 const historyModelName = ref("");
 const modelOptions = computed(() => {
   const options = (status.value?.models || []).map((model) => ({
-    title: model.source === "preset" ? model.name : `${model.name} · ${t("AI_PERSONAL_MODEL")}`,
+    title: model.name,
     value: model.id
   }));
   if (historyModelName.value && !options.some((option) => option.value === selectedModel.value))
