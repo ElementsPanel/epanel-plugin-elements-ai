@@ -137,7 +137,6 @@ onBeforeUnmount(() => controller?.abort());
     </SidebarPageHeader>
     <VProgressLinear v-if="busy" indeterminate color="primary" height="2" />
     <VCardText>
-      <p class="text-body-2 mb-4">{{ t("AI_HISTORY_HELP") }}</p>
       <VAlert v-if="error" type="error" variant="tonal" class="mb-3" :text="error" />
       <p v-if="!busy && !error && !conversations.length" class="ai-history-empty">
         {{ t("AI_HISTORY_EMPTY") }}

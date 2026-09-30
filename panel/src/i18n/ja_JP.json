@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "生成を停止",
   "AI_HISTORY": "会話履歴",
   "AI_HISTORY_EMPTY": "会話履歴はまだありません。",
-  "AI_HISTORY_HELP": "このアカウントの最新50件の会話を表示します。現在の権限範囲と異なる会話は表示されません。",
   "AI_HISTORY_REFRESH": "履歴を更新",
   "AI_HISTORY_SELECT_ALL": "すべての会話を選択",
   "AI_HISTORY_DESELECT_ALL": "会話の選択を解除",

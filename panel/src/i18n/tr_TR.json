@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "Üretimi durdur",
   "AI_HISTORY": "Sohbet geçmişi",
   "AI_HISTORY_EMPTY": "Henüz sohbet yok.",
-  "AI_HISTORY_HELP": "Bu hesaptaki en son 50 sohbet. Geçerli yetki kapsamınız dışındaki sohbetler gizlenir.",
   "AI_HISTORY_REFRESH": "Geçmişi yenile",
   "AI_HISTORY_SELECT_ALL": "Tüm konuşmaları seç",
   "AI_HISTORY_DESELECT_ALL": "Konuşma seçimini temizle",

@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "停止生成",
   "AI_HISTORY": "历史对话",
   "AI_HISTORY_EMPTY": "暂无历史对话。",
-  "AI_HISTORY_HELP": "显示当前账号最近 50 段对话；权限范围变更的对话不会显示。",
   "AI_HISTORY_REFRESH": "刷新历史对话",
   "AI_HISTORY_SELECT_ALL": "选择全部对话",
   "AI_HISTORY_DESELECT_ALL": "取消选择对话",

@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "생성 중지",
   "AI_HISTORY": "대화 기록",
   "AI_HISTORY_EMPTY": "아직 대화 기록이 없습니다.",
-  "AI_HISTORY_HELP": "현재 계정의 최근 대화 50개를 표시합니다. 현재 권한 범위를 벗어난 대화는 숨겨집니다.",
   "AI_HISTORY_REFRESH": "기록 새로고침",
   "AI_HISTORY_SELECT_ALL": "모든 대화 선택",
   "AI_HISTORY_DESELECT_ALL": "대화 선택 해제",

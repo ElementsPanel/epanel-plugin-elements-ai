@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "停止產生",
   "AI_HISTORY": "歷史對話",
   "AI_HISTORY_EMPTY": "尚無歷史對話。",
-  "AI_HISTORY_HELP": "顯示目前帳號最近 50 段對話；權限範圍變更的對話不會顯示。",
   "AI_HISTORY_REFRESH": "重新整理歷史對話",
   "AI_HISTORY_SELECT_ALL": "選取全部對話",
   "AI_HISTORY_DESELECT_ALL": "取消選取對話",

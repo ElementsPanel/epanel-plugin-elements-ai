@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "Generierung stoppen",
   "AI_HISTORY": "Gesprächsverlauf",
   "AI_HISTORY_EMPTY": "Noch keine Gespräche vorhanden.",
-  "AI_HISTORY_HELP": "Ihre 50 neuesten Gespräche. Gespräche außerhalb Ihres aktuellen Berechtigungsumfangs werden ausgeblendet.",
   "AI_HISTORY_REFRESH": "Verlauf aktualisieren",
   "AI_HISTORY_SELECT_ALL": "Alle Unterhaltungen auswählen",
   "AI_HISTORY_DESELECT_ALL": "Auswahl aufheben",

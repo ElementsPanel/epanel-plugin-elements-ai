@@ -78,7 +78,6 @@
   "AI_STOP_REPLY": "Stop generating",
   "AI_HISTORY": "Conversation history",
   "AI_HISTORY_EMPTY": "No conversations yet.",
-  "AI_HISTORY_HELP": "Your 50 most recent conversations. Conversations outside your current permission scope are hidden.",
   "AI_HISTORY_REFRESH": "Refresh history",
   "AI_HISTORY_SELECT_ALL": "Select all conversations",
   "AI_HISTORY_DESELECT_ALL": "Clear conversation selection",
