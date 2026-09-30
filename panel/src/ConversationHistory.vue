@@ -22,6 +22,7 @@ import SidebarPageHeader from "./SidebarPageHeader.vue";
 const props = defineProps<{ userId: string; currentId?: string }>();
 const emit = defineEmits<{
   (event: "open", conversation: ConversationDetail): void;
+  (event: "deleted", ids: string[]): void;
   (event: "close"): void;
   (event: "accountChanged"): void;
 }>();
@@ -90,6 +91,7 @@ const removeSelected = () => {
         (conversation) => !ids.includes(conversation.id)
       );
       selectedIds.value = [];
+      emit("deleted", ids);
     }
   });
 };

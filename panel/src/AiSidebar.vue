@@ -272,6 +272,12 @@ function newChat() {
   void nextTick(() => input.value?.focus());
 }
 
+function conversationsDeleted(ids: string[]) {
+  if (!conversationId.value || !ids.includes(conversationId.value)) return;
+  reset();
+  selectedModel.value = preferredModel();
+}
+
 function preferredModel() {
   const models = status.value?.models || [];
   return models.some((model) => model.id === selectedModel.value)
@@ -739,6 +745,7 @@ onBeforeUnmount(() => reset(true));
           :user-id="status.userId"
           :current-id="conversationId"
           @open="openConversation"
+          @deleted="conversationsDeleted"
           @close="showingHistory = false"
           @account-changed="accountChanged"
         />

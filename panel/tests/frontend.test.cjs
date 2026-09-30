@@ -1881,6 +1881,51 @@ test("history uses Vuetify buttons and deletes selected conversations in a batch
   f.wrapper.unmount();
 });
 
+for (const scenario of ["current", "other", "failed"]) {
+  test(`history deletion resets only a successfully deleted current conversation: ${scenario}`, async () => {
+    const saved = {
+      id: "b".repeat(32), title: "Current task", modelId: "preset:default",
+      modelName: "Default", updatedAt: Date.now(), canContinue: true,
+      messages: [{ role: "assistant", content: "Previous conversation answer" }]
+    };
+    const other = { ...saved, id: "c".repeat(32), title: "Other task" };
+    const f = sidebar({
+      listConversations: async () => [saved, other],
+      getConversation: async () => saved,
+      deleteConversations: async () => {
+        if (scenario === "failed") throw new Error("Deletion failed");
+        return 1;
+      }
+    });
+    try {
+      f.state.open = true;
+      await flushPromises();
+      await f.wrapper.get('[aria-label="AI_HISTORY"]').trigger("click");
+      await flushPromises();
+      await f.wrapper.findAll(".ai-history-entry")[0].trigger("click");
+      await flushPromises();
+      await f.wrapper.get("textarea").setValue("Unsent draft");
+      await f.wrapper.get('[aria-label="AI_HISTORY"]').trigger("click");
+      await flushPromises();
+      await f.wrapper.findAll(".ai-history-select")[scenario === "other" ? 1 : 0].setValue(true);
+      await f.wrapper.get('[aria-label="AI_HISTORY_DELETE_SELECTED"]').trigger("click");
+      await flushPromises();
+      assert.equal(f.wrapper.find(".ai-history").exists(), true, "deletion should keep the user in history");
+      await f.wrapper.get('[aria-label="AI_HISTORY"]').trigger("click");
+      await flushPromises();
+      const reset = scenario === "current";
+      assert.equal(f.wrapper.get(".ai-messages").text().includes("Previous conversation answer"), !reset);
+      assert.equal(f.wrapper.get("textarea").element.value, reset ? "" : "Unsent draft");
+      await f.wrapper.get("textarea").setValue("Next message");
+      await f.wrapper.get("form").trigger("submit");
+      await flushPromises();
+      assert.equal(f.calls[0][1], reset ? undefined : saved.id);
+    } finally {
+      f.wrapper.unmount();
+    }
+  });
+}
+
 test("history with an unavailable model is readable but cannot send until a new conversation", async () => {
   const saved = {
     id: "c".repeat(32),
