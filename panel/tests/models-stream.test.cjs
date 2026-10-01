@@ -415,6 +415,121 @@ test("regular personal endpoints block private IPv4, IPv6 and DNS rebinding; pre
   assert.equal(modelTransport(model.endpoint, true).proxy, false);
 });
 
+test("regular users can call Moonshot when the system resolver returns proxy Fake-IP addresses", async () => {
+  const f = await settingsFixture();
+  await f.models.save("alice", {
+    name: "Moonshot",
+    endpoint: "https://api.moonshot.cn/v1",
+    model: "moonshot-v1-8k"
+  }, false);
+  const [personal] = await f.models.list("alice");
+  const resolved = await f.models.resolve("alice", personal.id, false);
+  assert.equal(resolved.publicOnly, true);
+  const dnsQueries = [];
+  const { complete } = loader({
+    dns: {
+      lookup: (host, _options, callback) => {
+        assert.equal(host, "api.moonshot.cn");
+        callback(null, [
+          { address: "fdfe:dcba:9876::db", family: 6 },
+          { address: "198.18.0.219", family: 4 }
+        ]);
+      }
+    },
+    axios: {
+      get: async (url, options) => {
+        dnsQueries.push(options.params);
+        assert.equal(options.params.name, "api.moonshot.cn");
+        assert.equal(options.proxy, false);
+        assert.equal(options.maxRedirects, 0);
+        assert.equal(options.headers.Authorization, undefined);
+        const address = await new Promise((resolve, reject) => {
+          options.httpsAgent.options.lookup(new URL(url).hostname, {}, (error, address) => {
+            if (error) reject(error);
+            else resolve(address);
+          });
+        });
+        assert.equal(address, "223.5.5.5");
+        return { data: { Status: 0, Answer: options.params.type === "A" ? [
+          { type: 5, data: "provider.example." },
+          { type: 1, data: "8.147.223.37" }
+        ] : [] } };
+      },
+      post: async (url, _body, options) => {
+        assert.equal(url, "https://api.moonshot.cn/v1/chat/completions");
+        const addresses = await new Promise((resolve, reject) => {
+          options.httpsAgent.options.lookup("api.moonshot.cn", { all: true }, (error, addresses) => {
+            if (error) reject(error);
+            else resolve(addresses);
+          });
+        });
+        assert.deepEqual(addresses, [{ address: "8.147.223.37", family: 4 }]);
+        return {
+          data: Readable.from([event({ content: "Hello" }, "stop") + "data: [DONE]\n\n"]),
+          headers: { "content-type": "text/event-stream" }
+        };
+      }
+    }
+  })(source + "backend/provider.ts");
+  const result = await complete(resolved, [], [], new AbortController().signal, 2000, async () => {});
+  assert.equal(result.content, "Hello");
+  assert.deepEqual(dnsQueries.map((query) => query.type).sort(), ["A", "AAAA"]);
+});
+
+test("Fake-IP fallback respects address families and never connects to private DNS answers", async () => {
+  for (const [family, answer, allowed] of [
+    [4, "8.147.223.37", true],
+    [6, "2606:4700::1111", true],
+    [4, "127.0.0.1", false],
+    [4, "10.0.0.1", false],
+    [4, "198.18.0.219", false],
+    [6, "fdfe:dcba:9876::db", false],
+    [6, "::ffff:127.0.0.1", false]
+  ]) {
+    const { lookupPublicAddress } = loader({
+      dns: { lookup: (_host, _options, callback) => callback(null, [
+        { address: family === 4 ? "198.18.0.219" : "fdfe:dcba:9876::db", family }
+      ]) },
+      axios: { get: async (_url, options) => {
+        assert.equal(options.params.type, family === 4 ? "A" : "AAAA");
+        return { data: { Status: 0, Answer: [{ type: family === 4 ? 1 : 28, data: answer }] } };
+      } }
+    })(source + "backend/transport.ts");
+    const result = await new Promise((resolve) => {
+      lookupPublicAddress("api.moonshot.cn", { family }, (error, address, actualFamily) => {
+        resolve({ error, address, family: actualFamily });
+      });
+    });
+    if (allowed) assert.deepEqual(result, { error: null, address: answer, family });
+    else assert.match(result.error.message, /Private/);
+  }
+});
+
+test("Fake-IP resolution tries another HTTPS resolver on failure and fails closed if both fail", async () => {
+  for (const recover of [true, false]) {
+    const urls = [];
+    const { lookupPublicAddress } = loader({
+      dns: { lookup: (_host, _options, callback) => callback(null, [
+        { address: "198.18.0.219", family: 4 }
+      ]) },
+      axios: { get: async (url) => {
+        urls.push(url);
+        if (urls.length === 1 || !recover) throw new Error("DNS unavailable");
+        return { data: { Status: 0, Answer: [{ type: 1, data: "8.147.223.37" }] } };
+      } }
+    })(source + "backend/transport.ts");
+    const result = await new Promise((resolve) => {
+      lookupPublicAddress("api.moonshot.cn", { family: 4 }, (error, address) => resolve({ error, address }));
+    });
+    assert.equal(new Set(urls).size, 2);
+    if (recover) assert.deepEqual(result, { error: null, address: "8.147.223.37" });
+    else {
+      assert.ok(result.error);
+      assert.equal(result.address, "");
+    }
+  }
+});
+
 test("provider streams Unicode text before completion and reconstructs fragmented tool arguments", async () => {
   const stream = new PassThrough();
   const requests = [];

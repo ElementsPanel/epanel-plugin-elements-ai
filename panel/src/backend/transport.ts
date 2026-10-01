@@ -1,3 +1,4 @@
+import axios from "axios";
 import { lookup, type LookupOptions, type LookupAddress } from "dns";
 import { Agent as HttpAgent } from "http";
 import { Agent as HttpsAgent } from "https";
@@ -50,6 +51,17 @@ publicV6.addSubnet("2000::", 3, "ipv6");
 publicV6.addSubnet("::ffff:0:0", 96, "ipv6");
 publicV6.addSubnet("64:ff9b::", 96, "ipv6");
 
+// Common proxy Fake-IP pools are resolution hints, never connection targets.
+const fakeAddresses = new BlockList();
+fakeAddresses.addSubnet("198.18.0.0", 15, "ipv4");
+fakeAddresses.addSubnet("fdfe:dcba:9876::", 48, "ipv6");
+
+function isFakeAddress(address: string) {
+  const family = isIP(address);
+  return (family === 4 || family === 6) &&
+    fakeAddresses.check(address, family === 4 ? "ipv4" : "ipv6");
+}
+
 export function isPublicAddress(address: string) {
   if (address.includes("%")) return false;
   const family = isIP(address);
@@ -77,6 +89,58 @@ type LookupCallback = (
   address: string | LookupAddress[],
   family?: number
 ) => void;
+
+const publicResolvers = [
+  { url: "https://dns.alidns.com/resolve", address: "223.5.5.5" },
+  { url: "https://cloudflare-dns.com/dns-query", address: "1.1.1.1" }
+].map(({ url, address }) => ({
+  url,
+  agent: new HttpsAgent({
+    // Pin the resolver connection to avoid consulting Fake-IP DNS again.
+    // The URL hostname still supplies TLS certificate verification and SNI.
+    lookup: ((_host: string, options: LookupOptions, callback: LookupCallback) => {
+      if (options.all) callback(null, [{ address, family: 4 }]);
+      else callback(null, address, 4);
+    }) as import("net").LookupFunction
+  })
+}));
+
+async function resolvePublicAddresses(host: string, family?: number): Promise<LookupAddress[]> {
+  const types = family === 4 ? ["A"] : family === 6 ? ["AAAA"] : ["A", "AAAA"];
+  let failure: unknown;
+  for (const resolver of publicResolvers) {
+    try {
+      const answers = await Promise.all(types.map(async (type) => {
+        const { data } = await axios.get<{
+          Status: number;
+          Answer?: { type: number; data: string }[];
+        }>(resolver.url, {
+          params: { name: host, type },
+          headers: { Accept: "application/dns-json" },
+          adapter: "http",
+          proxy: false,
+          httpsAgent: resolver.agent,
+          responseType: "json",
+          timeout: 5000,
+          maxRedirects: 0,
+          maxContentLength: 16 * 1024
+        });
+        if (data?.Status !== 0 || (data.Answer !== undefined && !Array.isArray(data.Answer)))
+          throw new Error("Unable to resolve public model endpoint");
+        return (data.Answer || [])
+          .filter((entry) => entry.type === (type === "A" ? 1 : 28))
+          .map((entry) => ({ address: entry.data, family: type === "A" ? 4 : 6 }));
+      }));
+      const addresses = ([] as LookupAddress[]).concat(...answers);
+      if (!addresses.length) throw new Error("Unable to resolve public model endpoint");
+      return addresses;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
+}
+
 export const lookupPublicAddress = (
   host: string,
   options: LookupOptions,
@@ -84,10 +148,18 @@ export const lookupPublicAddress = (
 ) => {
   lookup(host, { ...options, all: true }, (error, addresses) => {
     if (error) return callback(error, "", 4);
-    if (!addresses.length || addresses.some((entry) => !isPublicAddress(entry.address)))
-      return callback(new Error("Private model endpoint is not allowed"), "", 4);
-    if (options.all) callback(null, addresses);
-    else callback(null, addresses[0].address, addresses[0].family);
+    const finish = (resolved: LookupAddress[]) => {
+      if (!resolved.length || resolved.some((entry) =>
+        typeof entry.address !== "string" || !isPublicAddress(entry.address)))
+        return callback(new Error("Private model endpoint is not allowed"), "", 4);
+      if (options.all) callback(null, resolved);
+      else callback(null, resolved[0].address, resolved[0].family);
+    };
+    if (addresses.length && addresses.every((entry) => isFakeAddress(entry.address))) {
+      // Connect only to the verified real address, preserving private-network
+      // and DNS-rebinding protection for ordinary users' personal models.
+      resolvePublicAddresses(host, options.family).then(finish, (error) => callback(error, "", 4));
+    } else finish(addresses);
   });
 };
 
