@@ -1057,7 +1057,7 @@ export class PanelTools {
           unknownSince = 0;
         }
       }
-      if (["running"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
+      if (["running", "unknown"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
       return status;
     }
     if (name === "get_msl_download_status") {
@@ -1143,7 +1143,7 @@ export class PanelTools {
           unknownSince = 0;
         }
       }
-      if (status.state === "running") this.fail("AI_OPERATION_FAILED");
+      if (["running", "unknown"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
       return status;
     }
     if (
@@ -1398,7 +1398,8 @@ export class PanelTools {
     };
     await publishProgress();
     const deadline = Date.now() + DOWNLOAD_WAIT_TIMEOUT_MS;
-    while (status.state === "running" && Date.now() < deadline) {
+    let unknownSince = status.state === "unknown" ? Date.now() : undefined;
+    while (["running", "unknown"].includes(status.state) && Date.now() < deadline) {
       await this.wait(500);
       status = (await executeModTool(
         this.ctx,
@@ -1407,8 +1408,14 @@ export class PanelTools {
         access
       )) as JsonObject;
       await publishProgress();
+      if (status.state === "unknown") {
+        unknownSince ??= Date.now();
+        if (Date.now() - unknownSince >= 10_000) break;
+      } else {
+        unknownSince = undefined;
+      }
     }
-    if (status.state === "running") this.fail("AI_OPERATION_FAILED");
+    if (["running", "unknown"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
     return status;
   }
 
@@ -1756,7 +1763,7 @@ export class PanelTools {
         options.onProgress
       );
     if (name === "wait_download_task")
-      return this.waitDownloadTask(args, identity, options.waitForDownloads, options.onProgress);
+      return this.waitDownloadTask(args, identity, options.waitForDownloads ?? true, options.onProgress);
     if (["list_docker_images", "pull_docker_image", "create_docker_instance"].includes(name))
       return this.dockerTool(name, args, identity);
     if (name === "execute_node_command") return this.executeNodeCommand(args, identity);

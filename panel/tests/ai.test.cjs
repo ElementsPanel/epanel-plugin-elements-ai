@@ -549,11 +549,91 @@ test("unified download wait tool waits for Java completion and reports progress"
     { taskType: "java", daemonId: "node-a", taskId: "msl_21" },
     undefined,
     undefined,
-    { waitForDownloads: true, onProgress: (value) => progress.push(value) }
+    { onProgress: (value) => progress.push(value) }
   );
   assert.equal(status.state, "completed");
   assert.equal(progress.at(-1).value, 100);
   assert.ok(progress.some((value) => value.value === 42));
+});
+
+test("download wait stays pending through unknown and running states without creating a card", async (t) => {
+  const taskId = "12345678-1234-1234-1234-123456789abc";
+  const sleeping = deferred();
+  const resume = deferred();
+  let round = 0;
+  let polls = 0;
+  const f = fixture({ completion: async () => ++round === 1
+    ? call("wait_download_task", { ...own, taskType: "mod", taskId })
+    : answer() });
+  t.after(() => f.chat.dispose());
+  t.after(() => resume.resolve());
+  f.ctx.sleep = async () => { sleeping.resolve(); await resume.promise; };
+  f.remote(async (event) => {
+    assert.equal(event, "instance/mods/install_status");
+    return { taskId, state: ["unknown", "running", "completed"][Math.min(polls++, 2)] };
+  });
+  const events = [];
+  const pending = f.chat.chat(f.request(), async (event) => events.push(event));
+  await Promise.race([sleeping.promise, pending]);
+  const wasWaiting = polls === 1 && round === 1;
+  const endedEarly = events.some((event) => event.type === "message" &&
+    event.message.tool === "wait_download_task" && event.message.pending === false);
+  resume.resolve();
+  await pending;
+  assert.ok(wasWaiting, "model must not continue while download status is unknown");
+  assert.equal(endedEarly, false);
+  assert.equal(polls, 3);
+  assert.equal(events.some((event) => event.type === "download"), false);
+  assert.ok(events.some((event) => event.type === "message" &&
+    event.message.ok === true && JSON.parse(event.message.content).state === "completed"));
+});
+
+test("background download polling remains non-blocking when explicitly requested", async () => {
+  const f = fixture();
+  const taskId = "12345678-1234-1234-1234-123456789abc";
+  f.ctx.sleep = async () => assert.fail("background polling must not wait");
+  f.remote(async () => ({ taskId, state: "running" }));
+  const result = await f.tools().execute("wait_download_task",
+    { ...own, taskType: "mod", taskId }, undefined, undefined, { waitForDownloads: false });
+  assert.equal(result.state, "running");
+  assert.equal(f.calls.length, 1);
+});
+
+test("download waits fail explicitly when task status remains unknown", async (t) => {
+  let now = 1000;
+  t.mock.method(Date, "now", () => now);
+  for (const taskType of ["mod", "msl_install", "msl_download"]) {
+    const f = fixture({ admin: true });
+    const taskId = "12345678-1234-1234-1234-123456789abc";
+    f.ctx.sleep = async (milliseconds) => { now += milliseconds; };
+    f.remote(async (event) => {
+      if (event === "instance/mods/install_status") return { taskId, state: "unknown" };
+      if (event === "instance/query_asynchronous") return [];
+      if (event === "instance/detail") return { config: { cwd: "/srv/server" } };
+      if (event === "file/status") return { downloadTasks: [] };
+      if (event === "file/list") return { items: [] };
+      assert.fail(event);
+    });
+    const started = now;
+    await assert.rejects(f.tools().execute("wait_download_task", {
+      ...own, taskType,
+      ...(taskType === "msl_download" ? { path: `msl-${"a".repeat(24)}.jar` } : { taskId })
+    }), /AI_OPERATION_FAILED/);
+    assert.equal(now - started, 10_000);
+  }
+});
+
+test("download wait can be cancelled while the task is still running", async () => {
+  const f = fixture();
+  const tools = f.tools();
+  const controller = new AbortController();
+  tools.signal = controller.signal;
+  const taskId = "12345678-1234-1234-1234-123456789abc";
+  f.remote(async () => ({ taskId, state: "running" }));
+  f.ctx.sleep = async () => { controller.abort(); };
+  await assert.rejects(tools.execute("wait_download_task", {
+    ...own, taskType: "mod", taskId
+  }), /AI_INTERRUPTED/);
 });
 
 test("instance deletion tools preserve the requested directory semantics and are admin-only", async () => {

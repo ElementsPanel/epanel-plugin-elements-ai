@@ -1060,7 +1060,6 @@ export class ChatService {
           let ok = false;
           let args: unknown;
           let downloadId: string | undefined;
-          let downloadTool: string | undefined;
           let batchId: string | undefined;
           let mutationSignature: string | undefined;
           const checkQueuedInput = () => {
@@ -1111,8 +1110,6 @@ export class ChatService {
               }
             } else {
               downloadId = activityId(call.function.name, args as ObjectValue);
-              downloadTool =
-                (downloadId && this.downloads.get(downloadId)?.activity.tool) || call.function.name;
               batchId =
                 call.function.name === "download_mod_batch" ? `mod-batch:${call.id}` : undefined;
               if (
@@ -1185,12 +1182,15 @@ export class ChatService {
                     const id = downloadId || batchId;
                     if (id) {
                       const record = this.downloads.get(id);
+                      // Waiting observes an existing task; it must not create or
+                      // resurrect a download card of its own.
+                      if (downloadId && (!record || !record.visible)) return;
                       await publish({
                         type: "download",
                         action: "upsert",
                         task: {
                           id,
-                          tool: downloadTool || call.function.name,
+                          tool: record?.activity.tool || call.function.name,
                           progress,
                           ...(record ? { state: record.state } : {})
                         }
@@ -1215,8 +1215,6 @@ export class ChatService {
                   task: this.downloadTask(record)
                 });
               }
-              if (downloadId && !this.downloads.has(downloadId))
-                await publish({ type: "download", action: "remove", id: downloadId });
             }
           } catch (error) {
             // Never send raw provider/daemon errors: they can contain URLs, headers and secrets.
