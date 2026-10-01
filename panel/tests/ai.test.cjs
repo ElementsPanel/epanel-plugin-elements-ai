@@ -3062,6 +3062,46 @@ test("Docker instance uses a local image and preserves stopped state without exp
   assert.equal(f.calls.filter((call) => call.event === "instance/new").length, 1);
 });
 
+for (const outcome of ["completed", "failed", "unknown", "network", "permission"]) {
+  test(`background mod cards are removed after ${outcome} without losing the result`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
+    const f = fixture();
+    t.after(() => f.chat.dispose());
+    const taskId = "12345678-1234-1234-1234-123456789abc";
+    const events = [];
+    f.remote(async () => {
+      if (outcome === "network") throw new Error("PRIVATE_NETWORK_ERROR");
+      return { taskId, state: outcome };
+    });
+    if (outcome === "permission") f.users.get("alice").instances = [];
+    const record = f.chat.registerDownload({
+      activity: { id: "mod:test", tool: "download_mod", progress: {} },
+      statusTool: "wait_download_task",
+      statusArgs: { ...own, taskType: "mod", taskId }
+    }, "alice", "conversation", f.request(), async (event) => events.push(structuredClone(event)));
+    const settle = () => new Promise(setImmediate);
+    await settle();
+    if (["unknown", "network"].includes(outcome)) {
+      assert.equal(record.state, "unknown");
+      for (let second = 0; second < 10; second++) {
+        t.mock.timers.tick(1000);
+        await settle();
+      }
+    }
+    assert.equal(record.state, outcome === "completed" ? "completed" : "failed");
+    assert.equal(record.visible, true);
+    assert.equal(record.monitoring, false);
+    t.mock.timers.tick(5000);
+    await settle();
+    assert.equal(record.visible, false);
+    assert.ok(events.some((event) => event.action === "remove" && event.id === "mod:test"));
+    const notices = f.chat.completedDownloadNotices("alice", "conversation");
+    assert.equal(notices.length, 1);
+    assert.match(notices[0], outcome === "completed" ? /completed/ : /failed/);
+    assert.doesNotMatch(JSON.stringify(events), /PRIVATE_NETWORK_ERROR/);
+  });
+}
+
 test("Docker pull participates in chat background task tracking", async (t) => {
   let round = 0;
   let taskId;

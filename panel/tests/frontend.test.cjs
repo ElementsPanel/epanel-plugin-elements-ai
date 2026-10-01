@@ -2094,6 +2094,55 @@ test("logout cancels history reads and late results never appear for the next ac
   f.wrapper.unmount();
 });
 
+test("mod cards hide unknown byte totals and remove every terminal state after the stream ends", async (t) => {
+  const pending = deferred();
+  let emit;
+  const removalCallbacks = [];
+  const originalTimeout = window.setTimeout.bind(window);
+  t.mock.method(window, "setTimeout", (callback, delay, ...args) => {
+    if (delay === 5000) {
+      removalCallbacks.push(callback);
+      return 100000 + removalCallbacks.length;
+    }
+    return originalTimeout(callback, delay, ...args);
+  });
+  const f = sidebar({ sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+    emit = onEvent;
+    await pending.promise;
+  } });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Download a mod");
+  await f.wrapper.get("form").trigger("submit");
+  const update = async (state, progress) => {
+    emit({ type: "download", action: "upsert", task: {
+      id: "mod:test", tool: "download_mod", state, progress
+    } });
+    await vue.nextTick();
+  };
+  await update("running", { downloadedBytes: 0, totalBytes: 0 });
+  assert.equal(f.wrapper.get(".ai-download-detail").text(), "…");
+  await update("running", { downloadedBytes: 42, totalBytes: 0 });
+  assert.equal(f.wrapper.get(".ai-download-detail").text(), "42 B");
+  await update("running", { value: 42, downloadedBytes: 42, totalBytes: 100 });
+  assert.equal(f.wrapper.get(".ai-download-detail").text(), "42% · 42 B / 100 B");
+  for (const state of ["completed", "failed", "cancelled", "stopped"]) {
+    await update(state, { downloadedBytes: 0, totalBytes: 0 });
+    if (state === "failed") assert.equal(f.wrapper.get(".ai-download-detail").text(), "AI_FAILED");
+    assert.equal(removalCallbacks.length, 1);
+    removalCallbacks.shift()();
+    await vue.nextTick();
+    assert.equal(f.wrapper.find(".ai-downloads").exists(), false);
+  }
+  await update("failed", {});
+  pending.resolve();
+  await flushPromises();
+  removalCallbacks.shift()();
+  await vue.nextTick();
+  assert.equal(f.wrapper.find(".ai-downloads").exists(), false);
+});
+
 test("Docker download card displays live percentages above the composer", async (t) => {
   const pending = deferred();
   let emit;

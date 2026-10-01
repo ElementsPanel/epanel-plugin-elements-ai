@@ -293,13 +293,13 @@ export class ChatService {
   }
 
   private scheduleDownloadRemoval(record: DownloadRecord) {
-    if (record.state !== "completed" || record.hideTimer) return;
+    if (!terminalDownloadStates.has(record.state) || record.hideTimer) return;
     record.hideTimer = setTimeout(() => {
       record.hideTimer = undefined;
       if (
         this.disposed ||
         this.downloads.get(record.activity.id) !== record ||
-        record.state !== "completed" ||
+        !terminalDownloadStates.has(record.state) ||
         !record.visible
       )
         return;
@@ -334,23 +334,25 @@ export class ChatService {
         record.state = typeof status?.state === "string" ? status.state : "unknown";
         record.progress = progress || statusProgress(record.statusTool, status || {});
         record.error = typeof status?.error === "string" ? status.error : undefined;
-        if (record.state === "unknown") record.unknownSince ||= Date.now();
-        else record.unknownSince = undefined;
-        await this.notifyDownload(record);
-        if (terminalDownloadStates.has(record.state)) {
-          this.scheduleDownloadRemoval(record);
-          return;
-        }
-        if (record.state === "unknown" && Date.now() - (record.unknownSince || Date.now()) > 10_000)
-          return;
       } catch (error) {
-        if (error instanceof ToolError) {
+        record.state = error instanceof ToolError ? "failed" : "unknown";
+        record.error = error instanceof ToolError
+          ? error.message
+          : this.ctx.i18n.$t("AI_OPERATION_FAILED");
+      }
+      if (this.disposed || this.downloads.get(record.activity.id) !== record) return;
+      if (record.state === "unknown") {
+        record.unknownSince ??= Date.now();
+        if (Date.now() - record.unknownSince >= 10_000) {
           record.state = "failed";
-          record.error = error.message;
-          record.progress = { ...record.progress };
-          await this.notifyDownload(record);
-          return;
+          record.error ||= this.ctx.i18n.$t("AI_OPERATION_FAILED");
         }
+      } else record.unknownSince = undefined;
+      await this.notifyDownload(record);
+      if (terminalDownloadStates.has(record.state)) {
+        record.monitoring = false;
+        this.scheduleDownloadRemoval(record);
+        return;
       }
       setTimeout(() => void poll(), 1000);
     };

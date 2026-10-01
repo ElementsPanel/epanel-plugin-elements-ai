@@ -233,9 +233,9 @@ const progressText = (progress?: ToolProgress) => {
   if (progress.currentItem && progress.totalItems)
     parts.push(progress.currentItem + "/" + progress.totalItems);
   const downloaded = formatBytes(progress.downloadedBytes);
-  const total = formatBytes(progress.totalBytes);
+  const total = progress.totalBytes && progress.totalBytes > 0 ? formatBytes(progress.totalBytes) : "";
   if (downloaded && total) parts.push(downloaded + " / " + total);
-  else if (downloaded) parts.push(downloaded);
+  else if (downloaded && progress.downloadedBytes! > 0) parts.push(downloaded);
   return parts.join(" · ");
 };
 
@@ -256,7 +256,7 @@ function collapseDownloads() {
 }
 
 function scheduleDownloadRemoval(task: DownloadActivity) {
-  if (task.state !== "completed") {
+  if (!["completed", "failed", "cancelled", "stopped"].includes(task.state || "")) {
     cancelDownloadRemoval(task.id);
     return;
   }
@@ -1005,7 +1005,7 @@ onBeforeUnmount(() => reset(true));
                         />
                         <span>{{ toolLabelFor(task.tool) }}</span>
                       </span>
-                      <span class="ai-download-detail">{{ progressText(task.progress) || (task.tool === "pull_docker_image" ? "…" : "0%") }}</span>
+                      <span class="ai-download-detail">{{ task.state === "failed" ? t("AI_FAILED") : progressText(task.progress) || "…" }}</span>
                     </span>
                   </span>
                 </span>
@@ -1025,11 +1025,11 @@ onBeforeUnmount(() => reset(true));
                         />
                         <span>{{ toolLabelFor(task.tool) }}</span>
                       </span>
-                      <span class="ai-download-detail">{{ progressText(task.progress) || (task.tool === "pull_docker_image" ? "…" : "0%") }}</span>
+                      <span class="ai-download-detail">{{ task.state === "failed" ? t("AI_FAILED") : progressText(task.progress) || "…" }}</span>
                     </div>
                     <VProgressLinear
                       :model-value="progressValue(task.progress) ?? 0"
-                      :indeterminate="task.tool === 'pull_docker_image' && task.state === 'running' && task.progress?.value === undefined"
+                      :indeterminate="['running', 'unknown'].includes(task.state || '') && progressValue(task.progress) === undefined"
                       color="primary"
                       height="5"
                       rounded
