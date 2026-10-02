@@ -29,6 +29,7 @@ import {
 } from "./api";
 import { defaultPreferences, type ChatPreferences } from "./preferences";
 import { CLIENT_CHAT_TIMEOUT_MS } from "./timing";
+import { useChatMessages } from "./useChatMessages";
 import type {
   AiStatus,
   ChatEvent,
@@ -138,13 +139,11 @@ const workingText = computed(() =>
 );
 const checking = ref(false);
 const error = ref("");
-const list = ref<HTMLElement>();
 const input = ref<InstanceType<typeof VTextarea>>();
-const AUTO_SCROLL_THRESHOLD = 48;
-let autoScrollEnabled = true;
-const showScrollBottom = ref(false);
-let scrollFrame: number | undefined;
-let forceScroll = false;
+const {
+  list, content: messageContent, visibleMessages, showScrollBottom, scroll, cancelScroll, resetMessages,
+  listScrolled, listWheel, listPointerDown, listKeydown, listTouchStart, listTouchMove
+} = useChatMessages(messages, () => props.state.open);
 let controller: AbortController | undefined;
 let statusController: AbortController | undefined;
 let generation = 0;
@@ -295,8 +294,7 @@ function reset(shouldClearDownloads = false) {
   checking.value = false;
   canContinue.value = true;
   historyModelName.value = "";
-  autoScrollEnabled = true;
-  showScrollBottom.value = false;
+  resetMessages();
 }
 
 function newChat() {
@@ -344,39 +342,6 @@ function openConversation(conversation: ConversationDetail) {
   showingHistory.value = false;
   void scroll(true);
   void nextTick(() => input.value?.focus());
-}
-
-function listScrolled() {
-  const element = list.value;
-  if (!element) return;
-  autoScrollEnabled =
-    element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_THRESHOLD;
-  showScrollBottom.value = !autoScrollEnabled;
-}
-
-function cancelScroll() {
-  if (scrollFrame !== undefined) window.cancelAnimationFrame(scrollFrame);
-  scrollFrame = undefined;
-  forceScroll = false;
-}
-
-function scroll(force = false) {
-  if (!props.state.open || (!force && !autoScrollEnabled)) return;
-  forceScroll ||= force;
-  if (scrollFrame !== undefined) return;
-  // SSE events can arrive faster than the browser paints. Measure and scroll
-  // once per frame, after Vue has patched the latest message content.
-  scrollFrame = window.requestAnimationFrame(() => {
-    scrollFrame = undefined;
-    const forced = forceScroll;
-    forceScroll = false;
-    if (!props.state.open || (!forced && !autoScrollEnabled)) return;
-    const element = list.value;
-    if (!element) return;
-    element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
-    autoScrollEnabled = true;
-    showScrollBottom.value = false;
-  });
 }
 
 async function refreshStatus() {
@@ -510,8 +475,6 @@ async function send() {
           } else {
             removeDownload(event.id);
           }
-        } else if (event.type === "done") {
-          messages.value = messages.value.slice(-160);
         } else if (event.type === "retry") {
           retry.value = event;
         }
@@ -797,8 +760,15 @@ onBeforeUnmount(() => reset(true));
           aria-live="polite"
           :aria-label="t('AI_MESSAGES')"
           :aria-busy="loading"
+          tabindex="0"
           @scroll.passive="listScrolled"
+          @wheel.passive="listWheel"
+          @pointerdown="listPointerDown"
+          @keydown="listKeydown"
+          @touchstart.passive="listTouchStart"
+          @touchmove.passive="listTouchMove"
         >
+          <div ref="messageContent" class="ai-messages-content">
           <div v-if="!messages.length" class="ai-empty">
             <VIcon class="ai-welcome-icon" icon="mdi-creation" size="76" />
             <h2>{{ t("AI_WELCOME_TITLE") }}</h2>
@@ -807,8 +777,9 @@ onBeforeUnmount(() => reset(true));
           <!-- Message events replace the object; deltas and final cleanup mutate
                the fields below. Include interaction state and locale in the cache. -->
           <article
-            v-for="(message, index) in messages"
+            v-for="{ message, index } in visibleMessages"
             :key="index"
+            :data-message-index="index"
             v-memo="[
               message,
               message.content,
@@ -954,6 +925,7 @@ onBeforeUnmount(() => reset(true));
               <span class="ai-working-shimmer" aria-hidden="true">{{ workingText }}</span>
             </div>
             <div v-if="retry?.detail" class="ai-retry-detail">{{ retry.detail }}</div>
+          </div>
           </div>
         </div>
         <VBtn
@@ -1368,6 +1340,7 @@ onBeforeUnmount(() => reset(true));
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   padding: 20px;
   scrollbar-width: thin;
@@ -1397,10 +1370,10 @@ onBeforeUnmount(() => reset(true));
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 .ai-message {
-  /* Keep history searchable while skipping offscreen layout and painting. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 120px;
   margin-bottom: 24px;
+}
+.ai-messages-content {
+  display: flow-root;
 }
 .ai-message--tool {
   margin-bottom: 6px;

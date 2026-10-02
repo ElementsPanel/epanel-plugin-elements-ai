@@ -1355,6 +1355,7 @@ test("sending while scrolled up forces the latest message into view and exposes 
     scrolls++;
     element.scrollTop = top;
   };
+  await messages.trigger("wheel", { deltaY: -100 });
   await messages.trigger("scroll");
   await vue.nextTick();
   assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), true);
@@ -2201,7 +2202,8 @@ test("long conversations reuse unchanged rows and coalesce stream scrolling", as
   assert.equal(scrolls, 0);
   paint();
   assert.equal(scrolls, 1);
-  assert.equal(f.wrapper.findAll(".ai-message").length, 160);
+  assert.equal(f.wrapper.findAll(".ai-message").length, 40);
+  assert.equal(f.wrapper.find("[data-message-index='119']").exists(), false);
   assert.equal(f.wrapper.findAll(".ai-text").at(-1).text(), "History 159" + " next".repeat(20));
   emit({ type: "delta", index: 159, content: " hidden" });
   await vue.nextTick();
@@ -2209,6 +2211,141 @@ test("long conversations reuse unchanged rows and coalesce stream scrolling", as
   await vue.nextTick();
   paint();
   assert.equal(scrolls, 1);
+});
+
+test("layout changes keep following streamed messages until the user scrolls upward", async (t) => {
+  const observers = [];
+  const previousObserver = global.ResizeObserver;
+  global.ResizeObserver = class {
+    targets = [];
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe(target) { this.targets.push(target); }
+    disconnect() { this.targets = []; }
+  };
+  t.after(() => { global.ResizeObserver = previousObserver; });
+  const pending = deferred();
+  let emit;
+  const f = sidebar({ sendMessage: async (_m, _c, _model, _user, _signal, onEvent) => {
+    emit = onEvent;
+    await pending.promise;
+  } });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  const messages = f.wrapper.get(".ai-messages");
+  const element = messages.element;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, writable: true, value: 1000 },
+    clientHeight: { configurable: true, writable: true, value: 200 },
+    scrollTop: { configurable: true, writable: true, value: 800 }
+  });
+  element.scrollTo = ({ top }) => { element.scrollTop = Math.max(0, top - element.clientHeight); };
+  await f.wrapper.get("textarea").setValue("Keep working");
+  await f.wrapper.get("form").trigger("submit");
+  await vue.nextTick();
+  paint();
+  const observer = observers.find((observer) => observer.targets.includes(element));
+  assert.ok(observer.targets.includes(f.wrapper.get(".ai-messages-content").element));
+  emit({ type: "message", index: 1, message: { role: "assistant", content: "More output" } });
+  await vue.nextTick();
+  element.scrollHeight = 1500;
+  // A delayed scroll event from the last paint now sees a larger bottom gap.
+  await messages.trigger("scroll");
+  observer.callback();
+  paint();
+  assert.equal(element.scrollTop, 1300);
+  element.clientHeight = 100;
+  observer.callback();
+  paint();
+  assert.equal(element.scrollTop, 1400);
+  assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), false);
+  element.scrollHeight = 1800;
+  observer.callback();
+  await messages.trigger("wheel", { deltaY: -100 });
+  element.scrollTop = 1000;
+  await messages.trigger("scroll");
+  paint();
+  assert.equal(element.scrollTop, 1000, "user input cancels an already queued automatic scroll");
+  observer.callback();
+  paint();
+  assert.equal(element.scrollTop, 1000);
+  assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), true);
+  element.scrollTop = 1700;
+  await messages.trigger("scroll");
+  element.scrollHeight = 2000;
+  observer.callback();
+  paint();
+  assert.equal(element.scrollTop, 1900);
+  f.wrapper.unmount();
+  assert.equal(observer.targets.length, 0);
+});
+
+test("older messages render in batches on upward scrolling and preserve the visible row", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({ sendMessage: async (_m, _c, _model, _user, _signal, onEvent) => {
+    emit = onEvent;
+    await pending.promise;
+  } });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Continue history");
+  await f.wrapper.get("form").trigger("submit");
+  emit({ type: "start", conversationId: "history", messages:
+    Array.from({ length: 200 }, (_, index) => ({ role: "assistant", content: `History ${index}` }))
+  });
+  await vue.nextTick();
+  const messages = f.wrapper.get(".ai-messages");
+  const element = messages.element;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, get: () => element.querySelectorAll("[data-message-index]").length * 100 },
+    clientHeight: { configurable: true, value: 200 },
+    scrollTop: { configurable: true, writable: true, value: 0 }
+  });
+  element.scrollTo = ({ top }) => { element.scrollTop = Math.max(0, top - element.clientHeight); };
+  paint();
+  assert.equal(f.wrapper.findAll(".ai-message").length, 40);
+  const anchor = f.wrapper.get("[data-message-index='160']").element;
+  anchor.getBoundingClientRect = () => {
+    const first = Number(element.querySelector("[data-message-index]").dataset.messageIndex);
+    const top = (160 - first) * 100 - element.scrollTop;
+    return { top, bottom: top + 100 };
+  };
+  await messages.trigger("wheel", { deltaY: -100 });
+  element.scrollTop = 50;
+  // Output below the anchor arrives in the same update as the older page.
+  emit({ type: "message", index: 200, message: { role: "assistant", content: "New output" } });
+  await messages.trigger("scroll");
+  await vue.nextTick();
+  paint();
+  assert.equal(f.wrapper.findAll(".ai-message").length, 81);
+  assert.equal(f.wrapper.find("[data-message-index='119']").exists(), false);
+  assert.equal(element.scrollTop, 4050);
+  assert.equal(anchor.getBoundingClientRect().top, -50);
+  assert.equal(f.wrapper.get("[data-message-index='160']").element, anchor);
+  await messages.trigger("scroll");
+  await vue.nextTick();
+  assert.equal(f.wrapper.findAll(".ai-message").length, 81, "restoring the anchor must not load another page");
+  await f.wrapper.get(".ai-scroll-bottom").trigger("click");
+  await vue.nextTick();
+  paint();
+  assert.equal(f.wrapper.findAll(".ai-message").length, 40);
+  assert.equal(f.wrapper.get(".ai-message:last-of-type").text().includes("New output"), true);
+  emit({ type: "done", conversationId: "history" });
+  await vue.nextTick();
+  for (let page = 0; page < 5; page++) {
+    await messages.trigger("wheel", { deltaY: -100 });
+    element.scrollTop = 0;
+    await messages.trigger("scroll");
+    await vue.nextTick();
+  }
+  assert.equal(f.wrapper.findAll(".ai-message").length, 201);
+  assert.equal(f.wrapper.get("[data-message-index='0']").text().includes("History 0"), true);
+  pending.resolve();
+  await flushPromises();
+  await f.wrapper.get('[aria-label="AI_NEW_CHAT"]').trigger("click");
+  assert.equal(f.wrapper.findAll(".ai-message").length, 0);
 });
 
 test("long streaming answers bound Markdown parsing and flush final text immediately", async (t) => {
