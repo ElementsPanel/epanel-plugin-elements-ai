@@ -29,6 +29,7 @@ import {
 } from "./api";
 import { defaultPreferences, type ChatPreferences } from "./preferences";
 import { CLIENT_CHAT_TIMEOUT_MS } from "./timing";
+import { currentInstanceFromRoute } from "./instanceContext";
 import { useChatMessages } from "./useChatMessages";
 import type {
   AiStatus,
@@ -480,11 +481,7 @@ async function send() {
         }
         void scroll();
       },
-      route.path.startsWith("/instances/terminal") &&
-        typeof route.query?.daemonId === "string" &&
-        typeof route.query?.instanceId === "string"
-        ? { daemonId: route.query.daemonId, instanceUuid: route.query.instanceId }
-        : undefined,
+      currentInstanceFromRoute(route),
       permissionMode.value
     );
   } catch (cause) {

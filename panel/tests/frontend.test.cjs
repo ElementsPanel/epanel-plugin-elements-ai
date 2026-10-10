@@ -614,21 +614,36 @@ test("stopping while awaiting approval removes its controls without granting per
   assert.equal(f.wrapper.find(".ai-approval").exists(), false);
 });
 
-test("chat sends the current terminal instance context and omits it on other pages", async () => {
+test("chat sends the current instance context for every instance page", async () => {
   const f = sidebar();
-  f.route.path = "/instances/terminal";
-  f.route.query = { daemonId: "node-a", instanceId: "owned" };
   f.state.open = true;
   await flushPromises();
-  await f.wrapper.get("textarea").setValue("Read this terminal");
-  await f.wrapper.get("form").trigger("submit");
-  await flushPromises();
-  assert.deepEqual(f.calls[0][6], { daemonId: "node-a", instanceUuid: "owned" });
+  for (const [index, path] of [
+    "/instances/terminal",
+    "/instances/terminal/files",
+    "/instances/terminal/mods",
+    "/instances/terminal/serverConfig",
+    "/instances/terminal/serverConfig/fileEdit",
+    "/instances/schedule"
+  ].entries()) {
+    f.route.path = path;
+    f.route.query = { daemonId: "node-a", instanceId: "owned" };
+    await f.wrapper.get("textarea").setValue(`Inspect instance ${index}`);
+    await f.wrapper.get("form").trigger("submit");
+    await flushPromises();
+    assert.deepEqual(f.calls[index][6], { daemonId: "node-a", instanceUuid: "owned" });
+  }
   f.route.path = "/instances";
   await f.wrapper.get("textarea").setValue("List my instances");
   await f.wrapper.get("form").trigger("submit");
   await flushPromises();
-  assert.equal(f.calls[1][6], undefined);
+  assert.equal(f.calls[6][6], undefined);
+  f.route.path = "/instances/terminal/files";
+  f.route.query = { daemonId: ["node-a", "node-b"], instanceId: "owned" };
+  await f.wrapper.get("textarea").setValue("Ignore ambiguous node");
+  await f.wrapper.get("form").trigger("submit");
+  await flushPromises();
+  assert.equal(f.calls[7][6], undefined);
   f.wrapper.unmount();
 });
 
