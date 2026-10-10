@@ -1642,6 +1642,13 @@ onBeforeUnmount(() => reset(true));
   white-space: nowrap;
   pointer-events: none;
 }
+@media (max-width: 992px) {
+  .ai-drawer :deep(.v-overlay__content),
+  .ai-drawer :deep(.ai-card) {
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+  }
+}
 @media (max-width: 360px) {
   .ai-card > :deep(.v-card-item) {
     padding-inline: 10px;
