@@ -740,6 +740,30 @@ test("successful mutations keep their receipts even if the next provider request
   assert.doesNotMatch(JSON.stringify(result), /PROVIDER_SECRET/);
 });
 
+test("illegal model output appends a capability warning below the provider detail", async () => {
+  const f = fixture({
+    completion: async () => {
+      const { ProviderError } = f.load(source + "backend/provider.ts");
+      throw new ProviderError("AI provider request failed", "Invalid tool call", true);
+    }
+  });
+  const result = await f.chat.chat(f.request({ message: "Stop my server" }));
+  const error = result.messages.at(-1);
+  assert.equal(error.role, "error");
+  assert.equal(error.content, "Invalid tool call\nAI_MODEL_INCOMPETENT");
+});
+
+test("transport-level provider failures keep the plain detail without warnings", async () => {
+  const f = fixture({
+    completion: async () => {
+      const { ProviderError } = f.load(source + "backend/provider.ts");
+      throw new ProviderError("AI provider request failed", "HTTP 503: overloaded", false);
+    }
+  });
+  const result = await f.chat.chat(f.request({ message: "Stop my server" }));
+  assert.equal(result.messages.at(-1).content, "HTTP 503: overloaded");
+});
+
 test("reconnecting a partial stream replaces only that attempt and never replays completed tools", async () => {
   const { Readable } = require("node:stream");
   const packet = (delta, finish_reason = null) =>

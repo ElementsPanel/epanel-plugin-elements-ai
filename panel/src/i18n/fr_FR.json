@@ -33,6 +33,7 @@
   "AI_MODEL_LOOP_DETECTED": "Le modèle semble être bloqué dans une boucle infinie. La tâche a été arrêtée.",
   "AI_OPERATION_FAILED": "L’opération a échoué ou son résultat est incertain. Vérifiez l’instance avant de réessayer.",
   "AI_PROVIDER_FAILED": "Le service IA a échoué, expiré ou répondu incorrectement. Vérifiez l’URL, la clé, le modèle et les outils pris en charge. Les opérations terminées figurent ci-dessus.",
+  "AI_MODEL_INCOMPETENT": "L’intelligence de ce modèle est peut-être trop limitée pour la gestion de serveurs.\nSi ce problème se produit fréquemment, changez de modèle.",
   "AI_ACCOUNT_CHANGED": "Le compte a changé ou vous êtes déconnecté. Rouvrez l’assistant pour une nouvelle conversation.",
   "AI_REQUEST_FAILED": "Connexion au plugin IA impossible. Rouvrez l’assistant.",
   "AI_CHECK_RESULT": "Connexion perdue ; certaines opérations peuvent être terminées. Vérifiez le panneau avant de renvoyer la même instruction.",

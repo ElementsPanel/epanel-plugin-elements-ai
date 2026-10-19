@@ -24,13 +24,24 @@ export interface ModelMessage {
 
 export class ProviderError extends Error {
   public readonly detail: string;
+  /** True when the model itself returned structurally invalid content. */
+  public readonly modelFormat: boolean;
 
-  constructor(message: string, detail: string) {
+  constructor(message: string, detail: string, modelFormat = false) {
     super(message);
     this.detail = detail;
+    this.modelFormat = modelFormat;
     this.name = "ProviderError";
   }
 }
+
+/** Marks failures caused by illegal model output rather than transport problems. */
+function formatError(message: string): Error {
+  return Object.assign(new Error(message), { modelFormat: true });
+}
+
+const isFormatError = (error: unknown): boolean =>
+  (error as { modelFormat?: boolean } | null)?.modelFormat === true;
 
 export function providerDetail(error: unknown, apiKey = ""): string {
   const value = error as {
@@ -141,7 +152,11 @@ export async function complete(
       );
     } catch (error) {
       if (signal.aborted || attempt >= MODEL_RETRY_DELAYS_MS.length || !retryable(error))
-        throw new ProviderError("AI provider request failed", providerDetail(error, model.apiKey));
+        throw new ProviderError(
+          "AI provider request failed",
+          providerDetail(error, model.apiKey),
+          isFormatError(error)
+        );
       const delayMs = MODEL_RETRY_DELAYS_MS[attempt];
       if (Date.now() + delayMs >= deadline)
         throw new ProviderError("AI provider request failed", providerDetail(error, model.apiKey));
@@ -259,12 +274,12 @@ async function completeOnce(
         const packet = JSON.parse(data);
         if (packet.error)
           throw Object.assign(new Error("Model stream error"), { response: { data: packet } });
-        if (!Array.isArray(packet.choices)) throw new Error("Invalid model stream");
+        if (!Array.isArray(packet.choices)) throw formatError("Invalid model stream");
         const choice = packet.choices.find((item: { index: number }) => item.index === 0);
         if (!choice) continue; // Usage-only chunks have no choices.
-        if (finished) throw new Error("Content after completion");
+        if (finished) throw formatError("Content after completion");
         const delta = choice.delta || {};
-        if (delta.role !== undefined && delta.role !== "assistant") throw new Error("Invalid role");
+        if (delta.role !== undefined && delta.role !== "assistant") throw formatError("Invalid role");
         const reasoningValue =
           delta.reasoning_content ??
           delta.reasoning ??
@@ -272,17 +287,17 @@ async function completeOnce(
           delta.thinking;
         if (typeof reasoningValue === "string" && reasoningValue) {
           reasoningLength += reasoningValue.length;
-          if (reasoningLength > 48000) throw new Error("Reasoning content too large");
+          if (reasoningLength > 48000) throw formatError("Reasoning content too large");
           await onReasoning(reasoningValue);
         }
         if (delta.content != null) {
           if (typeof delta.content !== "string" || content.length + delta.content.length > 24000)
-            throw new Error("Invalid content");
+            throw formatError("Invalid content");
           content += delta.content;
           if (delta.content) await onDelta(delta.content);
         }
         if (delta.tool_calls != null) {
-          if (!Array.isArray(delta.tool_calls)) throw new Error("Invalid tool calls");
+          if (!Array.isArray(delta.tool_calls)) throw formatError("Invalid tool calls");
           for (const piece of delta.tool_calls) {
             if (
               !piece ||
@@ -290,7 +305,7 @@ async function completeOnce(
               piece.index < 0 ||
               (piece.type !== undefined && piece.type !== "function")
             )
-              throw new Error("Invalid tool call");
+              throw formatError("Invalid tool call");
             const call = calls.get(piece.index) || {
               id: "",
               type: "function" as const,
@@ -298,13 +313,13 @@ async function completeOnce(
             };
             if (piece.id != null) {
               if (typeof piece.id !== "string" || (call.id && call.id !== piece.id))
-                throw new Error("Invalid tool ID");
+                throw formatError("Invalid tool ID");
               call.id = piece.id;
             }
             for (const key of ["name", "arguments"] as const) {
               const part = piece.function?.[key];
               if (part != null) {
-                if (typeof part !== "string") throw new Error("Invalid tool fragment");
+                if (typeof part !== "string") throw formatError("Invalid tool fragment");
                 call.function[key] += part;
               }
             }
@@ -313,7 +328,7 @@ async function completeOnce(
               call.function.name.length > 100 ||
               call.function.arguments.length > 12000
             )
-              throw new Error("Tool call too large");
+              throw formatError("Tool call too large");
             calls.set(piece.index, call);
             // Announce the request while arguments are streaming; execution still waits
             // for the complete, validated response below.
@@ -329,7 +344,7 @@ async function completeOnce(
         }
         if (choice.finish_reason != null) {
           if (!["stop", "tool_calls"].includes(choice.finish_reason))
-            throw new Error("Incomplete model response");
+            throw formatError("Incomplete model response");
           finished = true;
         }
       }
@@ -344,12 +359,16 @@ async function completeOnce(
       .map(([, call]) => call);
     const ids = new Set<string>();
     for (const call of toolCalls) {
-      if (!call.id || !call.function.name || ids.has(call.id)) throw new Error("Invalid tool call");
+      if (!call.id || !call.function.name || ids.has(call.id)) throw formatError("Invalid tool call");
       ids.add(call.id);
       // A completed stream alone does not make fragmented tool JSON valid.
-      JSON.parse(call.function.arguments);
+      try {
+        JSON.parse(call.function.arguments);
+      } catch {
+        throw formatError("Invalid tool arguments");
+      }
     }
-    if (!content.trim() && !toolCalls.length) throw new Error("Empty model response");
+    if (!content.trim() && !toolCalls.length) throw formatError("Empty model response");
     return {
       role: "assistant",
       content: content || null,

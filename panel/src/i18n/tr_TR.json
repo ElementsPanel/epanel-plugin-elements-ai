@@ -33,6 +33,7 @@
   "AI_MODEL_LOOP_DETECTED": "Model sonsuz bir döngüye girmiş olabilir. Görev durduruldu.",
   "AI_OPERATION_FAILED": "Panel işlemi başarısız veya sonucu belirsiz. Tekrar denemeden önce örneği kontrol edin.",
   "AI_PROVIDER_FAILED": "Yapay zekâ hizmeti başarısız oldu, zaman aşımına uğradı veya geçersiz yanıt verdi. Uç noktayı, anahtarı, modeli ve araç desteğini kontrol edin. Tamamlanan işlemler yukarıdadır.",
+  "AI_MODEL_INCOMPETENT": "Bu modelin zekâsı sunucu yönetimi görevleri için yetersiz olabilir.\nBu sorun sık sık yaşanıyorsa farklı bir modele geçin.",
   "AI_ACCOUNT_CHANGED": "Hesap değişti veya oturum kapandı. Yeni sohbet için asistanı yeniden açın.",
   "AI_REQUEST_FAILED": "Yapay zekâ eklentisine bağlanılamadı. Asistanı yeniden açın.",
   "AI_CHECK_RESULT": "Bağlantı başarısız; bazı işlemler tamamlanmış olabilir. Aynı talimatı tekrar göndermeden önce paneli kontrol edin.",

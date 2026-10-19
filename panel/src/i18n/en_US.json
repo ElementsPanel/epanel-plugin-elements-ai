@@ -33,6 +33,7 @@
   "AI_MODEL_LOOP_DETECTED": "The model may be stuck in an infinite loop. The task has been stopped.",
   "AI_OPERATION_FAILED": "The panel operation failed or its outcome is uncertain. Check the instance before retrying.",
   "AI_PROVIDER_FAILED": "The AI service failed, timed out or returned an invalid response. Check the endpoint, key, model and tool-call support. Completed operations are listed above.",
+  "AI_MODEL_INCOMPETENT": "This model may lack the intelligence required for server management work.\nIf this happens frequently, switch to a different model.",
   "AI_ACCOUNT_CHANGED": "The account changed or you signed out. Reopen the assistant to start a new chat.",
   "AI_REQUEST_FAILED": "Could not connect to the AI plugin. Reopen the assistant to try again.",
   "AI_CHECK_RESULT": "The connection failed; some operations may have completed. Check the panel before sending the same instruction again.",

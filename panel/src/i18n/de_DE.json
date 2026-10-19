@@ -33,6 +33,7 @@
   "AI_MODEL_LOOP_DETECTED": "Das Modell steckt möglicherweise in einer Endlosschleife. Die Aufgabe wurde beendet.",
   "AI_OPERATION_FAILED": "Panel-Aktion fehlgeschlagen oder Ergebnis unklar. Instanz vor erneutem Versuch prüfen.",
   "AI_PROVIDER_FAILED": "KI-Dienst fehlgeschlagen, Zeitüberschreitung oder ungültige Antwort. Endpunkt, Schlüssel, Modell und Tool-Unterstützung prüfen. Ausgeführte Aktionen stehen oben.",
+  "AI_MODEL_INCOMPETENT": "Die Intelligenz dieses Modells ist möglicherweise zu gering für Serververwaltungsaufgaben.\nFalls dieses Problem häufig auftritt, wechseln Sie zu einem anderen Modell.",
   "AI_ACCOUNT_CHANGED": "Konto gewechselt oder abgemeldet. Assistenten für einen neuen Chat erneut öffnen.",
   "AI_REQUEST_FAILED": "Verbindung zum KI-Plugin fehlgeschlagen. Assistenten erneut öffnen.",
   "AI_CHECK_RESULT": "Verbindung fehlgeschlagen; einige Aktionen könnten abgeschlossen sein. Panel vor erneutem Senden prüfen.",

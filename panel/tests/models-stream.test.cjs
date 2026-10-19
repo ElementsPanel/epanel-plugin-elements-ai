@@ -933,20 +933,7 @@ test("stopping during backoff or failing a permission recheck prevents another m
 });
 
 test("truncated or malformed tool streams never yield an executable tool call", async () => {
-  for (const text of [
-    event(
-      {
-        tool_calls: [
-          {
-            index: 0,
-            id: "x",
-            type: "function",
-            function: { name: "create_instance", arguments: "{}" }
-          }
-        ]
-      },
-      "tool_calls"
-    ),
+  const formats = [
     event(
       {
         tool_calls: [
@@ -977,7 +964,8 @@ test("truncated or malformed tool streams never yield an executable tool call", 
           "tool_calls"
         ) + "data: [DONE]\n\n"
     )
-  ]) {
+  ];
+  for (const text of formats) {
     const { complete } = loader({
       axios: {
         post: async () => ({
@@ -987,9 +975,35 @@ test("truncated or malformed tool streams never yield an executable tool call", 
       }
     })(source + "backend/provider.ts");
     await assert.rejects(
-      complete(model, [], [], new AbortController().signal, 2000, async () => {})
+      complete(model, [], [], new AbortController().signal, 2000, async () => {}),
+      (error) => error.name === "ProviderError" && error.modelFormat === true
     );
   }
+  // A stream cut off before [DONE] is a transport failure, not model output.
+  const { complete } = loader({
+    axios: {
+      post: async () => ({
+        data: Readable.from([
+          event({
+            tool_calls: [
+              {
+                index: 0,
+                id: "x",
+                type: "function",
+                function: { name: "create_instance", arguments: "{}" }
+              }
+            ]
+          }, "tool_calls")
+        ]),
+        headers: { "content-type": "text/event-stream" }
+      })
+    },
+    "./retry": { waitForRetry: async () => {} }
+  })(source + "backend/provider.ts");
+  await assert.rejects(
+    complete(model, [], [], new AbortController().signal, 2000, async () => {}),
+    (error) => error.name === "ProviderError" && error.modelFormat === false
+  );
 });
 
 test("SSE framing handles comments, CRLF boundaries, multiple data lines and bounded events", () => {

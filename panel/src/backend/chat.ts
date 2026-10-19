@@ -1273,7 +1273,9 @@ export class ChatService {
         error instanceof ToolError || error instanceof ModelSettingsError
           ? error.message
           : error instanceof ProviderError
-          ? error.detail
+          ? error.modelFormat
+            ? `${error.detail}\n${t("AI_MODEL_INCOMPETENT")}`
+            : error.detail
           : t("AI_PROVIDER_FAILED");
       for (const [index, message] of visible.entries()) {
         if (!message.pending) continue;
