@@ -3,21 +3,73 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { FileDiff } from "./types";
 
+type DiffLine = { text: string; kind: "added" | "removed" | "hunk" | "context" | "meta" };
+
 const props = defineProps<{ diff: FileDiff }>();
 const { t } = useI18n();
-const lines = computed(() =>
-  props.diff.patch.split("\n").map((line) => ({
-    // Make CRLF changes visible while retaining the original patch in history.
-    text: line.replace(/\r/g, "␍"),
-    kind: line.startsWith("+")
+
+// Present every hunk as one consolidated block: removals first, the untouched
+// lines once in the middle, additions last. Nearby edits then read as a single
+// change instead of interleaved single-line pairs. This is display-only; the
+// stored patch stays a real unified diff, and CRLF changes stay visible as ␍.
+const lines = computed<DiffLine[]>(() => {
+  const parsed: DiffLine[] = props.diff.patch.split("\n").map((raw) => ({
+    text: raw.replace(/\r/g, "␍"),
+    kind: raw.startsWith("+")
       ? "added"
-      : line.startsWith("-")
+      : raw.startsWith("-")
       ? "removed"
-      : line.startsWith("@@")
+      : raw.startsWith("@@")
       ? "hunk"
+      : raw.startsWith("\\")
+      ? "meta"
       : "context"
-  }))
-);
+  }));
+  const result: DiffLine[] = [];
+  let hunk: DiffLine[] = [];
+  const flush = () => {
+    if (hunk.length) result.push(...consolidate(hunk));
+    hunk = [];
+  };
+  for (const line of parsed) {
+    if (line.kind === "hunk") {
+      flush();
+      result.push(line);
+    } else hunk.push(line);
+  }
+  flush();
+  return result;
+});
+
+// "\ No newline at end of file" markers travel with the line they describe.
+function consolidate(hunk: DiffLine[]): DiffLine[] {
+  const units: DiffLine[][] = [];
+  for (const line of hunk) {
+    if (line.kind === "meta" && units.length) units[units.length - 1].push(line);
+    else units.push([line]);
+  }
+  const changed = (unit: DiffLine[]) => unit[0].kind === "added" || unit[0].kind === "removed";
+  let first = 0;
+  while (first < units.length && !changed(units[first])) first++;
+  if (first === units.length) return hunk;
+  let last = units.length - 1;
+  while (last > first && !changed(units[last])) last--;
+  const removed: DiffLine[] = [];
+  const kept: DiffLine[] = [];
+  const added: DiffLine[] = [];
+  for (const unit of units.slice(first, last + 1)) {
+    if (unit[0].kind === "removed") removed.push(...unit);
+    else if (unit[0].kind === "added") added.push(...unit);
+    else kept.push(...unit);
+  }
+  return [
+    ...units.slice(0, first).flat(),
+    ...removed,
+    ...kept,
+    ...added,
+    ...units.slice(last + 1).flat()
+  ];
+}
 </script>
 
 <template>
