@@ -1,3 +1,5 @@
 {
+  "id": "epanel-plugin-elements-ai",
+  "version": "0.1.0",
   "backend": "src/backend/index.ts"
 }
