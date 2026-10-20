@@ -3,6 +3,7 @@
   "name": "Elements AI",
   "displayName": "Elements AI",
   "version": "0.1.0",
+  "dual": true,
   "description": "让 Agent 接管面板。",
   "category": "tools",
   "priority": 100,
