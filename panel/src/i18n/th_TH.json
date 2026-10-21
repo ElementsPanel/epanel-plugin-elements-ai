@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "ถามผู้ใช้",
   "AI_TOOL_wait_terminal_update": "รอการอัปเดตเอาต์พุตเทอร์มินัล",
   "AI_TOOL_read_terminal": "อ่านเอาต์พุตเทอร์มินัล",
+  "AI_TOOL_send_instance_command": "ส่งคำสั่งไปยังคอนโซลอินสแตนซ์",
   "AI_TOOL_execute_node_command": "เรียกใช้คำสั่งเทอร์มินัลของโหนด",
   "AI_TOOL_list_msl_servers": "มิเรอร์ MSL: แสดงรายการซอฟต์แวร์เซิร์ฟเวอร์",
   "AI_TOOL_list_msl_versions": "มิเรอร์ MSL: แสดงรายการเวอร์ชัน",

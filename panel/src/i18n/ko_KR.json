@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "사용자에게 질문",
   "AI_TOOL_wait_terminal_update": "터미널 출력 업데이트 대기",
   "AI_TOOL_read_terminal": "터미널 출력 읽기",
+  "AI_TOOL_send_instance_command": "인스턴스 콘솔에 명령 보내기",
   "AI_TOOL_execute_node_command": "노드 터미널 명령 실행",
   "AI_TOOL_list_msl_servers": "MSL 미러: 서버 소프트웨어 목록 조회",
   "AI_TOOL_list_msl_versions": "MSL 미러: 버전 목록 조회",

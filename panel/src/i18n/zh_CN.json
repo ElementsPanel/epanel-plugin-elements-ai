@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "向用户询问",
   "AI_TOOL_wait_terminal_update": "等待终端内容更新",
   "AI_TOOL_read_terminal": "读取终端内容",
+  "AI_TOOL_send_instance_command": "发送实例控制台命令",
   "AI_TOOL_execute_node_command": "执行节点终端命令",
   "AI_TOOL_list_msl_servers": "MSL镜像源: 列出服务端",
   "AI_TOOL_list_msl_versions": "MSL镜像源: 列出版本",

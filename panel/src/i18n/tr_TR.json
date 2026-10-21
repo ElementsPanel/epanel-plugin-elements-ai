@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "Kullanıcıya sor",
   "AI_TOOL_wait_terminal_update": "Terminal çıktısının güncellenmesini bekle",
   "AI_TOOL_read_terminal": "Terminal çıktısını oku",
+  "AI_TOOL_send_instance_command": "Örnek konsoluna komut gönder",
   "AI_TOOL_execute_node_command": "Düğüm terminal komutunu çalıştır",
   "AI_TOOL_list_msl_servers": "MSL yansısı: Sunucu yazılımlarını listele",
   "AI_TOOL_list_msl_versions": "MSL yansısı: Sürümleri listele",

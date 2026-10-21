@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "Benutzer fragen",
   "AI_TOOL_wait_terminal_update": "Auf neue Terminalausgabe warten",
   "AI_TOOL_read_terminal": "Terminalausgabe lesen",
+  "AI_TOOL_send_instance_command": "Befehl an die Instanzkonsole senden",
   "AI_TOOL_execute_node_command": "Knoten-Terminalbefehl ausführen",
   "AI_TOOL_list_msl_servers": "MSL-Spiegelquelle: Serversoftware auflisten",
   "AI_TOOL_list_msl_versions": "MSL-Spiegelquelle: Versionen auflisten",

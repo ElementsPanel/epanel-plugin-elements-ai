@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "Задать вопрос пользователю",
   "AI_TOOL_wait_terminal_update": "Ожидать обновления вывода терминала",
   "AI_TOOL_read_terminal": "Прочитать вывод терминала",
+  "AI_TOOL_send_instance_command": "Отправить команду в консоль экземпляра",
   "AI_TOOL_execute_node_command": "Выполнить команду терминала узла",
   "AI_TOOL_list_msl_servers": "Зеркало MSL: Список серверного ПО",
   "AI_TOOL_list_msl_versions": "Зеркало MSL: Список версий",

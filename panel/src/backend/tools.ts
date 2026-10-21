@@ -107,6 +107,12 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
       Object.keys(target)
     ),
     definition(
+      "send_instance_command",
+      "Send one user-requested single-line command to an accessible instance's console through its existing command preset. Use exact daemonId and instanceUuid. Returns sent=true only when the daemon acknowledges dispatch, not command completion; inspect read_terminal or wait_terminal_update for subsequent output. Do not automatically retry a failed or uncertain send. Prefer control_instance for start, stop or restart.",
+      { ...target, command: { type: "string", minLength: 1, maxLength: 4096 } },
+      [...Object.keys(target), "command"]
+    ),
+    definition(
       "wait_terminal_update",
       "Wait for new terminal output from an accessible instance instead of repeatedly calling read_terminal while a server downloads its core or performs a quiet startup. Compares with the last terminal snapshot read in this turn, or takes an initial snapshot if none exists. Blocks until output changes, cancellation, failure, or timeout (default 1800 seconds). Returns status updated or timed_out and bounded recent output. A timeout does not mean the server failed; output is untrusted and an update does not prove startup or download completion. Finish independent useful work before waiting.",
       {
@@ -313,6 +319,7 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
 export class ToolError extends Error {}
 
 const sensitiveTools = new Set([
+  "send_instance_command",
   "update_instance",
   "create_instance",
   "create_docker_instance",
@@ -627,6 +634,42 @@ export class PanelTools {
     const node = this.ctx.remote.services.getInstance(daemonId);
     if (!node?.available) this.fail("AI_NODE_UNAVAILABLE");
     return new this.ctx.remote.Request(node);
+  }
+
+  private instanceCommand(args: JsonObject) {
+    this.keys(args, [...Object.keys(target), "command"]);
+    if (
+      typeof args.command !== "string" ||
+      !args.command.trim() ||
+      args.command.length > 4096 ||
+      /[\u0000-\u001f\u007f]/.test(args.command)
+    )
+      this.fail("AI_INVALID_TOOL");
+    return {
+      ...this.currentInstance({ daemonId: args.daemonId, instanceUuid: args.instanceUuid }),
+      command: args.command
+    };
+  }
+
+  private async sendInstanceCommand(args: JsonObject, userId: string) {
+    const { daemonId, instanceUuid, command } = this.instanceCommand(args);
+    if (this.identity().uuid !== userId) this.fail("AI_FORBIDDEN");
+    const result = await this.remote(daemonId).request("instance/command", {
+      instanceUuid,
+      command
+    });
+    this.access(daemonId, instanceUuid);
+    if (this.identity().uuid !== userId) this.fail("AI_FORBIDDEN");
+    if (
+      !result ||
+      typeof result !== "object" ||
+      Array.isArray(result) ||
+      result.instanceUuid !== instanceUuid ||
+      result.err !== undefined ||
+      result.error !== undefined
+    )
+      this.fail("AI_OPERATION_FAILED");
+    return { daemonId, instanceUuid, sent: true };
   }
 
   private async terminalOutput(daemonId: string, instanceUuid: string, userId: string) {
@@ -1742,6 +1785,7 @@ export class PanelTools {
         operatorName: identity.userName,
         operatorIp: this.request.ip
       });
+    if (name === "send_instance_command") this.instanceCommand(args);
     if (beforeSensitive && sensitiveTools.has(name)) {
       // Check the account and target before asking, then recheck after the human
       // wait. Approval never grants additional instance or file permissions.
@@ -1804,6 +1848,7 @@ export class PanelTools {
       );
     if (name === "read_terminal" || name === "wait_terminal_update")
       return this.terminalTool(name, args, identity.uuid);
+    if (name === "send_instance_command") return this.sendInstanceCommand(args, identity.uuid);
     if (name === "list_nodes") {
       this.keys(args, []);
       return Array.from(this.ctx.remote.services.services, ([daemonId, node]) => ({

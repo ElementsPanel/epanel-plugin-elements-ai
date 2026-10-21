@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "Poser une question à l’utilisateur",
   "AI_TOOL_wait_terminal_update": "Attendre une nouvelle sortie du terminal",
   "AI_TOOL_read_terminal": "Lire la sortie du terminal",
+  "AI_TOOL_send_instance_command": "Envoyer une commande à la console de l’instance",
   "AI_TOOL_execute_node_command": "Exécuter une commande terminal sur le nœud",
   "AI_TOOL_list_msl_servers": "Miroir MSL: Lister les logiciels serveur",
   "AI_TOOL_list_msl_versions": "Miroir MSL: Lister les versions",

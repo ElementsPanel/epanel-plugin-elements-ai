@@ -999,6 +999,7 @@ test("tool rows replace same-size spinners with distinct icons and mark only fai
     "update_instance",
     "create_instance",
     "read_terminal",
+    "send_instance_command",
     "list_mod_game_versions",
     "search_mods",
     "list_mod_versions",

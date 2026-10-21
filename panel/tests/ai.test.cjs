@@ -1715,6 +1715,222 @@ test("history keeps 50 conversations per account and reports save failures witho
   assert.equal(result.messages.at(-1).content, "AI_HISTORY_SAVE_FAILED");
 });
 
+test("instance console commands are available without file permission and use the exact console target", async () => {
+  const { toolDefinitions } = loader()(source + "backend/tools.ts");
+  for (const admin of [false, true]) {
+    const definition = toolDefinitions(admin, false)
+      .find((tool) => tool.function.name === "send_instance_command");
+    assert.ok(definition);
+    assert.deepEqual(definition.function.parameters.required, ["daemonId", "instanceUuid", "command"]);
+    assert.equal(definition.function.parameters.additionalProperties, false);
+    const f = fixture({ admin });
+    f.ctx.identity.accessPolicy.canFileManager = false;
+    const instance = admin ? { daemonId: "node-b", instanceUuid: "admin-target" } : own;
+    const command = "say 测试  console command  ";
+    f.remote(async (event, data) => {
+      assert.equal(event, "instance/command");
+      return { instanceUuid: data.instanceUuid, unrelated: "PRIVATE OUTPUT" };
+    });
+    assert.deepEqual(
+      await f.tools().execute("send_instance_command", { ...instance, command }),
+      { ...instance, sent: true }
+    );
+    assert.deepEqual(f.calls, [{
+      node: instance.daemonId, event: "instance/command",
+      data: { instanceUuid: instance.instanceUuid, command }
+    }]);
+  }
+});
+
+test("instance console commands reject invalid arguments before approval or dispatch", async () => {
+  const f = fixture();
+  let approvals = 0;
+  const beforeSensitive = async () => { approvals++; };
+  for (const command of [undefined, null, 123, "", "   ", "x".repeat(4097),
+    "say first\nsay second", "say first\rsay second", "say\tfirst", "say\0first", "\x03", "\x1b[31m", "say\x7f"]) {
+    await assert.rejects(
+      f.tools().execute("send_instance_command", { ...own, command }, undefined, beforeSensitive),
+      /AI_INVALID_TOOL/
+    );
+  }
+  for (const args of [
+    { command: "list" },
+    { ...own, command: "list", disableResponse: true },
+    { ...own, command: "list", timeoutSeconds: 1 },
+    { ...own, command: "list", instanceUuid: "../owned" },
+    { ...own, command: "list", daemonId: "" }
+  ])
+    await assert.rejects(
+      f.tools().execute("send_instance_command", args, undefined, beforeSensitive),
+      /AI_INVALID_TOOL/
+    );
+  assert.equal(approvals, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("instance console commands enforce ownership, global restrictions and node availability", async () => {
+  for (const admin of [false, true]) {
+    const f = fixture({ admin });
+    let approvals = 0;
+    const beforeSensitive = async () => { approvals++; };
+    const denied = [{ ...own, instanceUuid: "global0001" }];
+    if (!admin) denied.push({ ...own, daemonId: "node-b" }, { ...own, instanceUuid: "foreign" });
+    for (const instance of denied)
+      await assert.rejects(
+        f.tools().execute("send_instance_command", { ...instance, command: "list" }, undefined, beforeSensitive),
+        /AI_FORBIDDEN/
+      );
+    f.nodes.get("node-a").available = false;
+    await assert.rejects(
+      f.tools().execute("send_instance_command", { ...own, command: "list" }, undefined, beforeSensitive),
+      /AI_NODE_UNAVAILABLE/
+    );
+    assert.equal(approvals, 0);
+    assert.equal(f.calls.length, 0);
+  }
+  const f = fixture();
+  // A coarse UUID-only permission check cannot override exact node ownership.
+  f.ctx.identity.canAccessInstance = () => true;
+  await assert.rejects(
+    f.tools().execute("send_instance_command", { ...own, daemonId: "node-b", command: "list" }),
+    /AI_FORBIDDEN/
+  );
+  assert.equal(f.calls.length, 0);
+});
+
+test("instance console commands recheck permissions and cancellation after approval", async () => {
+  for (const reason of ["ownership", "account", "guard", "offline", "cancel", "role"]) {
+    const f = fixture({ admin: reason === "role" });
+    const tools = f.tools();
+    const controller = new AbortController();
+    tools.signal = controller.signal;
+    let approvals = 0;
+    await assert.rejects(
+      tools.execute("send_instance_command", { ...own, command: "list" }, undefined, async () => {
+        approvals++;
+        assert.equal(f.calls.length, 0);
+        if (reason === "ownership") f.users.get("alice").instances = [];
+        if (reason === "account") f.users.delete("alice");
+        if (reason === "guard") f.guard(false);
+        if (reason === "offline") f.nodes.get("node-a").available = false;
+        if (reason === "cancel") controller.abort();
+        if (reason === "role") f.users.get("alice").permission = 1;
+      }),
+      /AI_FORBIDDEN|AI_INTERRUPTED|AI_NODE_UNAVAILABLE/
+    );
+    assert.equal(approvals, 1, reason);
+    assert.equal(f.calls.length, 0, reason);
+  }
+});
+
+test("instance console commands require a matching acknowledgement and recheck access after dispatch", async () => {
+  const f = fixture();
+  for (const receipt of [null, true, [], {}, { instanceUuid: "other" },
+    { instanceUuid: "owned", err: "PRIVATE ERROR" },
+    { instanceUuid: "owned", error: "PRIVATE ERROR" }]) {
+    f.remote(async () => receipt);
+    await assert.rejects(
+      f.tools().execute("send_instance_command", { ...own, command: "list" }),
+      /AI_OPERATION_FAILED/
+    );
+  }
+  for (const reason of ["ownership", "cancel"]) {
+    const revoked = fixture();
+    const tools = revoked.tools();
+    const controller = new AbortController();
+    tools.signal = controller.signal;
+    revoked.remote(async () => {
+      if (reason === "ownership") revoked.users.get("alice").instances = [];
+      else controller.abort();
+      return { instanceUuid: "owned" };
+    });
+    await assert.rejects(
+      tools.execute("send_instance_command", { ...own, command: "list" }),
+      /AI_FORBIDDEN|AI_INTERRUPTED/
+    );
+    assert.equal(revoked.calls.length, 1);
+  }
+});
+
+test("instance console commands use chat approval in default mode and dispatch directly in full mode", async (t) => {
+  const args = { ...own, command: "say Hello" };
+  for (const mode of ["approve", "deny", "full"]) {
+    let round = 0;
+    const f = fixture({ completion: async (_config, messages, definitions) => {
+      assert.ok(definitions.some((tool) => tool.function.name === "send_instance_command"));
+      assert.match(messages[0].content, /sent=true result acknowledges dispatch/);
+      return ++round === 1 ? call("send_instance_command", args) : answer();
+    } });
+    t.after(() => f.chat.dispose());
+    let approvals = 0;
+    const result = await f.chat.chat(f.request({
+      message: "Send say Hello to this instance", currentInstance: own,
+      permissionMode: mode === "full" ? "full" : "default"
+    }), (event) => {
+      if (!event.message?.approval) return;
+      approvals++;
+      assert.equal(f.calls.length, 0);
+      assert.deepEqual(JSON.parse(event.message.approval.arguments), args);
+      f.chat.respondToApproval(f.request(), event.message.approval.id, { approved: mode === "approve" });
+    });
+    assert.equal(approvals, mode === "full" ? 0 : 1);
+    assert.equal(f.calls.length, mode === "deny" ? 0 : 1);
+    const operation = result.messages.find((message) => message.role === "tool");
+    assert.equal(operation.ok, mode !== "deny");
+    assert.ok(result.messages.every((message) => !message.approval && !message.pending));
+    if (mode === "deny") assert.match(operation.content, /AI_OPERATION_DENIED/);
+    else assert.deepEqual(JSON.parse(operation.content), { ...own, sent: true });
+  }
+});
+
+test("instance console commands cannot replay after successful or uncertain sends or denied approval", async (t) => {
+  const args = { ...own, command: "give Steve diamond 1" };
+  for (const mode of ["success", "uncertain", "deny"]) {
+    let round = 0;
+    const f = fixture({ completion: async () =>
+      ++round < 3 ? call("send_instance_command", args, `console-${round}`) : answer()
+    });
+    t.after(() => f.chat.dispose());
+    if (mode === "uncertain") f.remote(async () => { throw new Error("PRIVATE_NODE_SECRET connection lost"); });
+    let approvals = 0;
+    const result = await f.chat.chat(f.request({
+      message: "Give Steve one diamond", permissionMode: mode === "deny" ? "default" : "full"
+    }), (event) => {
+      if (!event.message?.approval) return;
+      approvals++;
+      f.chat.respondToApproval(f.request(), event.message.approval.id, { approved: false });
+    });
+    assert.equal(approvals, mode === "deny" ? 1 : 0);
+    assert.equal(f.calls.length, mode === "deny" ? 0 : 1);
+    const operations = result.messages.filter((message) => message.role === "tool");
+    assert.equal(operations.length, 2);
+    assert.equal(operations[0].ok, mode === "success");
+    assert.equal(operations[1].ok, false);
+    assert.match(operations[1].content, /AI_OPERATION_FAILED/);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_NODE_SECRET/);
+  }
+});
+
+test("instance console command output remains available through terminal reads and waits", async () => {
+  const f = fixture();
+  let output = "Server ready";
+  f.remote(async (event, data) => {
+    if (event === "instance/outputlog") return output;
+    assert.equal(event, "instance/command");
+    output += "\nThere are 0 players online";
+    return { instanceUuid: data.instanceUuid };
+  });
+  const tools = f.tools();
+  await tools.execute("read_terminal", own);
+  assert.deepEqual(await tools.execute("send_instance_command", { ...own, command: "list" }),
+    { ...own, sent: true });
+  const updated = await tools.execute("wait_terminal_update", own);
+  assert.equal(updated.status, "updated");
+  assert.match(updated.content, /There are 0 players online/);
+  assert.deepEqual(f.calls.map((entry) => entry.event),
+    ["instance/outputlog", "instance/command", "instance/outputlog"]);
+});
+
 test("terminal snapshots are bounded, strip controls and enforce ownership before and after reads", async () => {
   const f = fixture();
   f.remote(async (event) => {

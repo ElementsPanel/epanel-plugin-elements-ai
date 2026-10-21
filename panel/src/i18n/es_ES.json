@@ -105,6 +105,7 @@
   "AI_TOOL_ask_user": "Preguntar al usuario",
   "AI_TOOL_wait_terminal_update": "Esperar nueva salida del terminal",
   "AI_TOOL_read_terminal": "Leer salida del terminal",
+  "AI_TOOL_send_instance_command": "Enviar comando a la consola de la instancia",
   "AI_TOOL_execute_node_command": "Ejecutar comando de terminal del nodo",
   "AI_TOOL_list_msl_servers": "Espejo MSL: Listar software de servidor",
   "AI_TOOL_list_msl_versions": "Espejo MSL: Listar versiones",
