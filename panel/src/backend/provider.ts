@@ -263,7 +263,7 @@ async function completeOnce(
     for await (const chunk of stream) {
       if (controller.signal.aborted) throw new Error("Stream interrupted");
       size += Buffer.byteLength(chunk);
-      if (size > 1024 * 1024) throw new Error("Model response too large");
+      if (size > 3 * 1024 * 1024) throw new Error("Model response too large");
       for (const data of parser.push(
         decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
       )) {
