@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_installed_plugins": "Список установленных плагинов панели или узла",
+  "AI_TOOL_get_plugin_config": "Прочитать настройки плагина",
+  "AI_TOOL_update_plugin_config": "Изменить настройки плагина",
   "AI_TOOL_list_docker_images": "Список образов Docker",
   "AI_TOOL_pull_docker_image": "Загрузить образ Docker",
   "AI_TOOL_create_docker_instance": "Создать экземпляр Docker",

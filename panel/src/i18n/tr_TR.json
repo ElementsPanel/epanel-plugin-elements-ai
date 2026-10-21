@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_installed_plugins": "Panel veya düğümde kurulu eklentileri listele",
+  "AI_TOOL_get_plugin_config": "Eklenti yapılandırmasını oku",
+  "AI_TOOL_update_plugin_config": "Eklenti yapılandırmasını değiştir",
   "AI_TOOL_list_docker_images": "Docker imajlarını listele",
   "AI_TOOL_pull_docker_image": "Docker imajını indir",
   "AI_TOOL_create_docker_instance": "Docker örneği oluştur",

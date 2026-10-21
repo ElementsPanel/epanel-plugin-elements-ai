@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_installed_plugins": "패널 또는 노드에 설치된 플러그인 목록",
+  "AI_TOOL_get_plugin_config": "플러그인 설정 읽기",
+  "AI_TOOL_update_plugin_config": "플러그인 설정 변경",
   "AI_TOOL_list_docker_images": "Docker 이미지 목록",
   "AI_TOOL_pull_docker_image": "Docker 이미지 가져오기",
   "AI_TOOL_create_docker_instance": "Docker 인스턴스 생성",

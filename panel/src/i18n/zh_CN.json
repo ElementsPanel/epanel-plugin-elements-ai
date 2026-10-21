@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_installed_plugins": "查询面板或节点已安装插件",
+  "AI_TOOL_get_plugin_config": "读取插件配置",
+  "AI_TOOL_update_plugin_config": "修改插件配置",
   "AI_TOOL_list_docker_images": "列出 Docker 镜像",
   "AI_TOOL_pull_docker_image": "拉取 Docker 镜像",
   "AI_TOOL_create_docker_instance": "创建 Docker 实例",

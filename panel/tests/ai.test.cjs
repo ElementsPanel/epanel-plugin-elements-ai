@@ -244,6 +244,362 @@ function fixture({
   };
 }
 
+function pluginFixture(options = {}) {
+  const f = fixture({ admin: true, ...options });
+  const fields = [
+    { key: "enabled", type: "boolean", title: "Enabled" },
+    { key: "port", type: "number", title: "Port", min: 1, max: 65535, required: true },
+    {
+      key: "mode", type: "select", title: "Mode",
+      options: [{ value: "safe", label: "Safe" }, { value: "fast", label: "Fast" }]
+    },
+    {
+      key: "apiKey", type: "string", title: "API key", secret: true,
+      placeholder: "PLACEHOLDER_SECRET", options: [{ value: "OPTION_SECRET", label: "Hidden" }]
+    },
+    {
+      key: "entries", type: "list", title: "Entries", maxItems: 3,
+      fields: [
+        { key: "name", type: "string", title: "Name", required: true },
+        { key: "token", type: "string", title: "Token", secret: true }
+      ]
+    },
+    { type: "link", key: "settingsLink", title: "Settings", route: "/private" }
+  ];
+  const values = {
+    enabled: true, port: 23333, mode: "safe", apiKey: "PLUGIN_SECRET", internal: "INTERNAL_SECRET",
+    entries: [
+      { id: "first", name: "First", token: "FIRST_SECRET", hasToken: true },
+      { id: "second", name: "Second", token: "SECOND_SECRET", hasToken: true }
+    ]
+  };
+  const schemas = new Map([
+    ["epanel-plugin-example", { id: "epanel-plugin-example", fields, values: structuredClone(values) }],
+    ["disabled", null]
+  ]);
+  const nodeSchemas = new Map([
+    ["epanel-plugin-example", { id: "epanel-plugin-example", fields, values: structuredClone(values) }],
+    ["disabled", null]
+  ]);
+  const inventory = () => [...schemas.keys()].map((id) => ({
+    id, version: "1.0.0", enabled: id !== "disabled", running: id !== "disabled",
+    state: id === "disabled" ? "disabled" : "active", error: "INVENTORY_SECRET"
+  }));
+  const writes = [];
+  const reads = [];
+  const changeResult = { saved: true, application: "applied" };
+  const validate = f.load("common/src/plugin_contract.ts").validatePluginSettings;
+  const read = (scope, id) => {
+    reads.push({ scope, id });
+    return structuredClone((scope === "node" ? nodeSchemas : schemas).get(id));
+  };
+  const write = (scope, id, values) => {
+    const schema = (scope === "node" ? nodeSchemas : schemas).get(id);
+    validate(schema.fields, values);
+    writes.push({ scope, id, values: structuredClone(values) });
+    schema.values = structuredClone(values);
+    return { ...changeResult };
+  };
+  f.ctx.plugins = { inventory };
+  f.ctx.settingsForm = {
+    read: async (id) => read("panel", id),
+    write: async (id, values) => write("panel", id, values)
+  };
+  f.remote(async (event, data) => {
+    if (event === "plugin/list") return inventory();
+    if (event === "plugin/config") return read("node", data.id);
+    if (event === "plugin/config/write") return write("node", data.id, data.values);
+    if (event === "info/overview") return {};
+    throw new Error(`Unexpected plugin event: ${event}`);
+  });
+  return { ...f, fields, schemas, nodeSchemas, writes, reads, changeResult, inventory };
+}
+
+const pluginTarget = { scope: "panel", pluginId: "epanel-plugin-example" };
+const nodePluginTarget = { ...pluginTarget, scope: "node", daemonId: "node-a" };
+
+test("plugin configuration tools are administrator-only even for forged calls", async () => {
+  const f = pluginFixture({ admin: false });
+  const definitions = f.load(source + "backend/tools.ts").toolDefinitions;
+  for (const name of ["list_installed_plugins", "get_plugin_config", "update_plugin_config"]) {
+    assert.ok(definitions(true).some((tool) => tool.function.name === name));
+    assert.ok(!definitions(false, true).some((tool) => tool.function.name === name));
+    await assert.rejects(
+      f.tools().execute(name, { ...nodePluginTarget, values: { enabled: false } }), /AI_FORBIDDEN/
+    );
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.reads.length, 0);
+  assert.equal(f.writes.length, 0);
+});
+
+test("panel and node plugin discovery and reads expose fields without credentials", async () => {
+  const f = pluginFixture();
+  for (const target of [pluginTarget, nodePluginTarget]) {
+    const { pluginId, ...destination } = target;
+    const list = await f.tools().execute("list_installed_plugins", destination);
+    assert.deepEqual(list.plugins.map((plugin) => plugin.pluginId), [pluginId, "disabled"]);
+    assert.equal(list.plugins[1].enabled, false);
+    assert.doesNotMatch(JSON.stringify(list), /SECRET|error/);
+    const config = await f.tools().execute("get_plugin_config", target);
+    assert.equal(config.pluginId, pluginId);
+    assert.equal(config.values.port, 23333);
+    assert.equal(config.values.apiKey, "[REDACTED]");
+    assert.equal(config.values.entries[0].token, "[REDACTED]");
+    assert.equal(config.values.entries[0].id, "first");
+    assert.equal(config.fields.find((field) => field.key === "apiKey").secret, true);
+    assert.deepEqual(config.fields.find((field) => field.key === "mode").options, f.fields[2].options);
+    assert.ok(!config.fields.some((field) => field.key === "settingsLink"));
+    assert.doesNotMatch(JSON.stringify(config), /SECRET|internal|hasToken|placeholder/);
+  }
+  assert.deepEqual(f.calls.map((call) => call.event), ["plugin/list", "plugin/list", "plugin/config"]);
+  assert.deepEqual(f.calls.at(-1).data, { id: pluginTarget.pluginId });
+  assert.equal(f.writes.length, 0);
+});
+
+test("plugin updates merge the latest configuration and preserve omitted values and secrets", async () => {
+  const f = pluginFixture();
+  for (const target of [pluginTarget, nodePluginTarget]) {
+    const previous = structuredClone((target.scope === "node" ? f.nodeSchemas : f.schemas).get(target.pluginId).values);
+    const result = await f.tools().execute("update_plugin_config", {
+      ...target, values: { enabled: false }
+    });
+    assert.deepEqual(f.writes.at(-1).values, { ...previous, enabled: false });
+    assert.deepEqual(result, { ...target, saved: true, application: "applied" });
+    assert.doesNotMatch(JSON.stringify(result), /SECRET|values/);
+  }
+  assert.deepEqual(f.logs.map((log) => log.type), ["system_config_change", "daemon_config_change"]);
+  assert.equal(f.logs[1].payload.daemon_id, "node-a");
+  assert.doesNotMatch(JSON.stringify(f.logs), /SECRET|values/);
+  assert.deepEqual(f.calls.map((call) => call.event), [
+    "plugin/list", "plugin/config", "plugin/config/write", "info/overview"
+  ]);
+});
+
+test("plugin list edits retain hidden item fields and match secrets by existing item IDs", async () => {
+  const f = pluginFixture();
+  const config = await f.tools().execute("get_plugin_config", pluginTarget);
+  const entries = config.values.entries;
+  await f.tools().execute("update_plugin_config", {
+    ...pluginTarget,
+    values: { entries: [{ ...entries[1], name: "Renamed" }, entries[0]] }
+  });
+  assert.deepEqual(f.writes[0].values.entries, [
+    { id: "second", name: "Renamed", token: "SECOND_SECRET", hasToken: true },
+    { id: "first", name: "First", token: "FIRST_SECRET", hasToken: true }
+  ]);
+  await f.tools().execute("update_plugin_config", {
+    ...pluginTarget, values: { entries: [{ name: "Position edit" }, { name: "First" }, { name: "New" }] }
+  });
+  assert.equal(f.writes[1].values.entries[0].token, "SECOND_SECRET");
+  assert.deepEqual(f.writes[1].values.entries[2], { name: "New" });
+  await f.tools().execute("update_plugin_config", { ...pluginTarget, values: { entries: [] } });
+  assert.deepEqual(f.writes[2].values.entries, []);
+});
+
+test("the AI plugin can update its actual settings without losing preset model keys", async () => {
+  const f = pluginFixture({ storageData: new Map([
+    ["EpanelPluginElementsAiSettings:config", {
+      presets: [{
+        id: "preset-one", name: "Preset", model: "model", endpoint: "https://ai.example/v1",
+        apiKey: "PRESET_SECRET", thinkingEnabled: null, thinkingEffort: "medium"
+      }], modelLoopProtection: true
+    }]
+  ]) });
+  let form;
+  f.ctx.settingsForm.declare = (declaration) => { form = declaration; };
+  const models = await f.load(source + "backend/settings.ts").registerSettings(f.ctx);
+  const pluginId = "epanel-plugin-elements-ai";
+  f.schemas.set(pluginId, null);
+  f.ctx.settingsForm.read = async (id) => ({ id, fields: form.fields(), values: form.read() });
+  f.ctx.settingsForm.write = async (_id, values) => {
+    await form.write(values);
+    return { saved: true, application: "applied" };
+  };
+  const target = { scope: "panel", pluginId };
+  await f.tools().execute("update_plugin_config", { ...target, values: { modelLoopProtection: false } });
+  assert.equal(models.modelLoopProtectionEnabled(), false);
+  const config = await f.tools().execute("get_plugin_config", target);
+  assert.equal(config.values.presets[0].id, "preset-one");
+  assert.equal(config.values.presets[0].apiKey, "[REDACTED]");
+  await f.tools().execute("update_plugin_config", {
+    ...target, values: { presets: [{ ...config.values.presets[0], name: "Renamed preset" }] }
+  });
+  const resolved = await models.resolve("alice", "preset:preset-one", true);
+  assert.equal(resolved.name, "Renamed preset");
+  assert.equal(resolved.apiKey, "PRESET_SECRET");
+  assert.doesNotMatch(JSON.stringify(config), /PRESET_SECRET/);
+  assert.ok(!Object.hasOwn(config.values.presets[0], "hasApiKey"));
+});
+
+test("invalid plugin fields, types, scopes and prototype keys never reach a configuration writer", async () => {
+  const f = pluginFixture();
+  const invalid = [
+    { scope: "invalid", pluginId: pluginTarget.pluginId, values: { enabled: false } },
+    { ...pluginTarget, daemonId: "node-a", values: { enabled: false } },
+    { ...pluginTarget, scope: "node", values: { enabled: false } },
+    { ...pluginTarget, pluginId: "not-installed", values: { enabled: false } },
+    { ...pluginTarget, instanceUuid: "owned", values: { enabled: false } },
+    { ...pluginTarget, values: {} },
+    { ...pluginTarget, values: [] },
+    ...[
+      { unknown: true }, { enabled: "false" }, { port: 0 }, { port: 65536 }, { port: null },
+      { mode: "invented" }, { internal: "change" }, { settingsLink: "change" },
+      { entries: [{ unknown: true }] }, { entries: [{ token: "new" }, {}, {}, {}] },
+      { entries: [{ id: "missing", name: "Bad identity" }] },
+      { entries: [{ id: "first", name: "First" }, { id: "first", name: "Duplicate" }] },
+      JSON.parse('{"__proto__":{"admin":true}}'),
+      JSON.parse('{"entries":[{"name":"Bad","constructor":{}}]}')
+    ].map((values) => ({ ...pluginTarget, values }))
+  ];
+  for (const args of invalid) {
+    await assert.rejects(f.tools().execute("update_plugin_config", args), /AI_INVALID_TOOL/);
+  }
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.calls.filter((call) => call.event === "plugin/config/write").length, 0);
+});
+
+test("plugins without declared settings can be inspected but not overwritten", async () => {
+  const f = pluginFixture();
+  const target = { scope: "panel", pluginId: "disabled" };
+  assert.deepEqual(await f.tools().execute("get_plugin_config", target), {
+    ...target, fields: [], values: {}
+  });
+  await assert.rejects(
+    f.tools().execute("update_plugin_config", { ...target, values: { arbitrary: true } }), /AI_INVALID_TOOL/
+  );
+  assert.equal(f.writes.length, 0);
+});
+
+test("plugin writes wait for approval and merge changes made during the wait", async () => {
+  const f = pluginFixture();
+  let approvals = 0;
+  await f.tools().execute("update_plugin_config", { ...pluginTarget, values: { enabled: false } },
+    undefined, async () => {
+      approvals++;
+      assert.equal(f.writes.length, 0);
+      f.schemas.get(pluginTarget.pluginId).values.port = 24444;
+    }
+  );
+  assert.equal(approvals, 1);
+  assert.equal(f.writes[0].values.port, 24444);
+  assert.equal(f.writes[0].values.enabled, false);
+  assert.equal(f.reads.length, 2);
+  await f.tools().execute("get_plugin_config", pluginTarget, undefined, async () => { approvals++; });
+  assert.equal(approvals, 1);
+});
+
+test("plugin configuration rechecks identity, guard and cancellation after reads and approval", async () => {
+  for (const target of [pluginTarget, nodePluginTarget]) {
+    for (const change of ["permission", "guard", "abort"]) {
+      const f = pluginFixture();
+      const tools = f.tools();
+      const controller = new AbortController();
+      tools.signal = controller.signal;
+      await assert.rejects(
+        tools.execute("update_plugin_config", { ...target, values: { enabled: false } }, undefined, async () => {
+          if (change === "permission") f.users.get("alice").permission = 1;
+          if (change === "guard") f.guard(false);
+          if (change === "abort") controller.abort();
+        }), /AI_FORBIDDEN|AI_INTERRUPTED/
+      );
+      assert.equal(f.writes.length, 0);
+    }
+  }
+  const f = pluginFixture();
+  f.ctx.settingsForm.read = async (id) => {
+    f.users.get("alice").permission = 1;
+    return f.schemas.get(id);
+  };
+  await assert.rejects(f.tools().execute("get_plugin_config", pluginTarget), /AI_FORBIDDEN/);
+  const node = pluginFixture();
+  node.remote(async () => {
+    node.guard(false);
+    return node.inventory();
+  });
+  await assert.rejects(
+    node.tools().execute("list_installed_plugins", { scope: "node", daemonId: "node-a" }), /AI_FORBIDDEN/
+  );
+});
+
+test("unavailable nodes are rejected before plugin writes or approval", async () => {
+  const f = pluginFixture();
+  f.nodes.get("node-a").available = false;
+  let approvals = 0;
+  await assert.rejects(
+    f.tools().execute("update_plugin_config", { ...nodePluginTarget, values: { enabled: false } },
+      undefined, async () => { approvals++; }), /AI_NODE_UNAVAILABLE/
+  );
+  assert.equal(approvals, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("plugin writes report application state and keep successful saves when overview refresh fails", async () => {
+  const f = pluginFixture();
+  for (const application of ["pending", "failed", "restart-required"]) {
+    Object.assign(f.changeResult, { application, error: "ACTIVATION_SECRET" });
+    const result = await f.tools().execute("update_plugin_config", {
+      ...pluginTarget, values: { enabled: false }
+    });
+    assert.equal(result.saved, true);
+    assert.equal(result.application, application);
+    assert.doesNotMatch(JSON.stringify(result), /SECRET|error/);
+  }
+  f.remote(async (event, data) => {
+    if (event === "plugin/list") return f.inventory();
+    if (event === "plugin/config") return f.nodeSchemas.get(data.id);
+    if (event === "plugin/config/write") return { saved: true, application: "applied" };
+    if (event === "info/overview") throw new Error("REFRESH_SECRET");
+  });
+  assert.deepEqual(await f.tools().execute("update_plugin_config", {
+    ...nodePluginTarget, values: { enabled: false }
+  }), { ...nodePluginTarget, saved: true, application: "applied" });
+});
+
+test("plugin chat writes obey default approval, denial and full operation modes on both scopes", async () => {
+  for (const target of [pluginTarget, nodePluginTarget]) {
+    for (const mode of ["approve", "deny", "full"]) {
+      let round = 0;
+      const args = { ...target, values: { enabled: false } };
+      const f = pluginFixture({
+        completion: async () => ++round === 1 ? call("update_plugin_config", args) : answer()
+      });
+      let approvals = 0;
+      const result = await f.chat.chat(f.request({
+        message: "Change this plugin setting", permissionMode: mode === "full" ? "full" : "default"
+      }), (event) => {
+        if (!event.message?.approval) return;
+        approvals++;
+        assert.equal(f.writes.length, 0);
+        assert.deepEqual(JSON.parse(event.message.approval.arguments), args);
+        f.chat.respondToApproval(f.request(), event.message.approval.id, { approved: mode === "approve" });
+      });
+      assert.equal(approvals, mode === "full" ? 0 : 1);
+      assert.equal(f.writes.length, mode === "deny" ? 0 : 1);
+      const operation = result.messages.find((message) => message.role === "tool");
+      assert.equal(operation.ok, mode !== "deny");
+      assert.doesNotMatch(JSON.stringify(result), /SECRET/);
+    }
+  }
+});
+
+test("uncertain plugin writes cannot replay with a fresh call ID or leak writer errors", async () => {
+  let round = 0;
+  const args = { ...pluginTarget, values: { enabled: false } };
+  const f = pluginFixture({
+    completion: async () => ++round < 3 ? call("update_plugin_config", args, `plugin-${round}`) : answer()
+  });
+  let writes = 0;
+  f.ctx.settingsForm.write = async () => {
+    writes++;
+    throw new Error("WRITE_SECRET");
+  };
+  const result = await f.chat.chat(f.request({ message: "Change this plugin setting" }));
+  assert.equal(writes, 1);
+  assert.ok(result.messages.some((message) => message.content.includes("AI_OPERATION_FAILED")));
+  assert.doesNotMatch(JSON.stringify(result), /WRITE_SECRET/);
+});
+
 test("regular users only enumerate their own exact node/instance pairs and no secrets", async () => {
   const f = fixture();
   const result = await f.tools().execute("list_instances", {});
@@ -1733,6 +2089,7 @@ test("HTTP routes enforce authentication and disappear when the guard plugin unl
   for (const name of ["identity", "remote", "operations", "roles"]) ctx.set(name, f.ctx[name]);
   ctx.set("i18n", { $t: (key) => key, define() {} });
   ctx.set("storage", { getStorage: () => ({ load: async () => null }) });
+  ctx.set("plugins", { inventory: () => [] });
   ctx.set("settingsForm", { declare() {} });
   ctx.set("middleware", {
     permission:

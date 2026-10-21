@@ -990,6 +990,9 @@ test("tool rows replace same-size spinners with distinct icons and mark only fai
   await f.wrapper.get("form").trigger("submit");
   const tools = [
     "list_nodes",
+    "list_installed_plugins",
+    "get_plugin_config",
+    "update_plugin_config",
     "list_instances",
     "get_instance",
     "control_instance",

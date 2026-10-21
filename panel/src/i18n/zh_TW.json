@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_installed_plugins": "查詢面板或節點已安裝外掛",
+  "AI_TOOL_get_plugin_config": "讀取外掛設定",
+  "AI_TOOL_update_plugin_config": "修改外掛設定",
   "AI_TOOL_list_docker_images": "列出 Docker 映像",
   "AI_TOOL_pull_docker_image": "拉取 Docker 映像",
   "AI_TOOL_create_docker_instance": "建立 Docker 實例",

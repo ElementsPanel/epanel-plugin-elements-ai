@@ -6,6 +6,7 @@ import { fileDiff } from "./diff";
 import { MslMirrorsService, MINECRAFT_SERVERS, mslDefinitions } from "./msl";
 import { terminalText } from "./terminal";
 import { executeModTool, modDefinitions } from "./mods";
+import { executePluginConfigTool, pluginConfigDefinitions } from "./plugin_config";
 
 export type RequestContext = Parameters<PanelPluginContext["identity"]["of"]>[0];
 
@@ -196,6 +197,7 @@ export function toolDefinitions(admin: boolean, filesAllowed = false) {
     );
   if (admin)
     tools.push(
+      ...pluginConfigDefinitions,
       ...mslDefinitions.filter((tool) => !internalDownloadStatusTools.has(tool.function.name)),
       definition(
         "list_docker_images",
@@ -1723,6 +1725,23 @@ export class PanelTools {
     )
       this.fail("AI_FORBIDDEN");
     if (name === "ask_user") this.fail("AI_INVALID_TOOL");
+    if (pluginConfigDefinitions.some((tool) => tool.function.name === name))
+      return executePluginConfigTool(this.ctx, name, args, {
+        check: () => {
+          const current = this.identity();
+          if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
+        },
+        fail: (key) => this.fail(key),
+        remote: (daemonId) => this.remote(daemonId),
+        beforeWrite: beforeSensitive && (async () => {
+          const scope = this.scope();
+          await beforeSensitive();
+          if (this.identity().uuid !== identity.uuid || this.scope() !== scope)
+            this.fail("AI_FORBIDDEN");
+        }),
+        operatorName: identity.userName,
+        operatorIp: this.request.ip
+      });
     if (beforeSensitive && sensitiveTools.has(name)) {
       // Check the account and target before asking, then recheck after the human
       // wait. Approval never grants additional instance or file permissions.

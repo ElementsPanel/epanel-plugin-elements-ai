@@ -1,4 +1,7 @@
 {
+  "AI_TOOL_list_installed_plugins": "List installed panel or node plugins",
+  "AI_TOOL_get_plugin_config": "Read plugin configuration",
+  "AI_TOOL_update_plugin_config": "Update plugin configuration",
   "AI_TOOL_list_docker_images": "List Docker images",
   "AI_TOOL_pull_docker_image": "Pull Docker image",
   "AI_TOOL_create_docker_instance": "Create Docker instance",

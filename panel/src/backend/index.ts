@@ -11,6 +11,7 @@ export const inject = [
   "koa",
   "i18n",
   "storage",
+  "plugins",
   "settingsForm",
   "middleware",
   "roles",
