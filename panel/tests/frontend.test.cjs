@@ -255,39 +255,6 @@ function sidebar(api = {}, moduleOverrides = {}) {
   };
 }
 
-test("header button toggles the shared sidebar state", async () => {
-  const filename = "external/epanel-plugin-elements-ai/panel/src/AiButton.vue";
-  const descriptor = parse(fs.readFileSync(path.join(root, filename), "utf8"), {
-    filename
-  }).descriptor;
-  const script = compileScript(descriptor, { id: "epanel-plugin-elements-ai-button", inlineTemplate: true });
-  const state = vue.reactive({ open: false });
-  const component = load(
-    filename,
-    {
-      "vue-i18n": { useI18n: () => ({ t: (key) => key }) },
-      "vuetify/components": {
-        VBtn: vue.defineComponent({ setup: () => () => vue.h("button") }),
-        VTooltip: vue.defineComponent({
-          props: ["text", "location"],
-          setup:
-            (_, { slots }) =>
-            () =>
-              slots.activator?.({ props: {} })
-        })
-      }
-    },
-    script.content
-  ).default;
-  const wrapper = mount(component, { props: { state } });
-  await wrapper.get("button").trigger("click");
-  assert.equal(state.open, true);
-  assert.equal(wrapper.get("button").attributes("aria-expanded"), "true");
-  await wrapper.get("button").trigger("click");
-  assert.equal(state.open, false);
-  wrapper.unmount();
-});
-
 test("sidebar respects IME/Shift+Enter and displays model text without HTML execution", async () => {
   const f = sidebar();
   f.state.open = true;

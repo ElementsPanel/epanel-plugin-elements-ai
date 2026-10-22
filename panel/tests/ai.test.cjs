@@ -3189,8 +3189,12 @@ test("mod downloads resolve exact catalog selections and never substitute anothe
   const install = f.calls.find((item) => item.event === "instance/mods/install_task");
   assert.equal(install.node, "node-a");
   assert.equal(install.data.instanceUuid, "owned");
-  assert.equal(install.data.url, modVersion().files[0].url);
-  assert.equal(install.data.fallbackUrl, undefined);
+  // The stored default prefers the mirror and keeps the upstream CDN as fallback.
+  assert.equal(
+    install.data.url,
+    "https://mod.mcimirror.top/data/project/versions/version1/example.jar?token=PRIVATE_URL"
+  );
+  assert.equal(install.data.fallbackUrl, modVersion().files[0].url);
   assert.equal(install.data.overwrite, false);
   assert.equal(install.data.type, "mod");
   assert.equal(f.logs[0].type, "instance_file_download_from_url");
@@ -3198,6 +3202,33 @@ test("mod downloads resolve exact catalog selections and never substitute anothe
   const status = await f.tools().execute("get_mod_download_status", { ...own, taskId: modTaskId });
   assert.equal(status.state, "running");
   assert.equal(status.downloadedBytes, 5);
+});
+
+test("mod catalog follows the mod manager's persisted source preference at runtime", async () => {
+  const storageData = new Map([["ModManagerSettings:config", { sourcePreference: "official" }]]);
+  const f = modFixture({ storageData });
+  const installs = () => f.calls.filter((item) => item.event === "instance/mods/install_task");
+  const versionCalls = () => f.modCalls.filter((item) => item.url.endsWith("/project/project/version"));
+  const officialUrl = modVersion().files[0].url;
+  const mirrorUrl = "https://mod.mcimirror.top/data/project/versions/version1/example.jar?token=PRIVATE_URL";
+
+  await f.tools().execute("download_mod", { ...own, ...modSelection });
+  assert.equal(new URL(versionCalls()[0].url).origin, "https://api.modrinth.com");
+  assert.equal(installs()[0].data.url, officialUrl);
+  assert.equal(installs()[0].data.fallbackUrl, mirrorUrl);
+
+  // Changing the mod manager setting applies to the next tool call without a reload.
+  storageData.set("ModManagerSettings:config", { sourcePreference: "mirror" });
+  await f.tools().execute("download_mod", { ...own, ...modSelection, fileName: "example-sources.jar" });
+  assert.equal(new URL(versionCalls()[1].url).origin, "https://mod.mcimirror.top");
+  assert.equal(
+    installs()[1].data.url,
+    "https://mod.mcimirror.top/data/project/versions/version1/example-sources.jar"
+  );
+  assert.equal(
+    installs()[1].data.fallbackUrl,
+    "https://cdn.modrinth.com/data/project/versions/version1/example-sources.jar"
+  );
 });
 
 test("batch mod downloads serialize node tasks and continue after a failed item", async () => {

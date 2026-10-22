@@ -1,5 +1,7 @@
 import type { PanelPluginContext } from "../../../../../panel/src/app/plugin";
 import { ModManagerService } from "../../../../../panel/plugins/mod/src/backend/mod_manager";
+import { isMirrorDownloadUrl } from "../../../../../panel/plugins/mod/src/backend/mcim";
+import { loadSourcePreference } from "../../../../../panel/plugins/mod/src/backend/settings";
 import type { ToolProgress } from "../types";
 import { DOWNLOAD_WAIT_TIMEOUT_MS } from "../timing";
 
@@ -141,13 +143,16 @@ export const modDefinitions = [
 ];
 
 const catalogs = new WeakMap<PanelPluginContext, ModManagerService>();
-function catalog(ctx: PanelPluginContext) {
+async function catalog(ctx: PanelPluginContext) {
   let value = catalogs.get(ctx);
   if (!value) {
     value = new ModManagerService(ctx);
     catalogs.set(ctx, value);
     ctx.effect(() => () => catalogs.delete(ctx));
   }
+  // The AI plugin owns this instance, so it mirrors the preference the mod
+  // manager persists instead of keeping a second, separately configured one.
+  value.setSourcePreference(await loadSourcePreference(ctx));
   return value;
 }
 
@@ -220,11 +225,15 @@ function downloadUrl(value: unknown, source: string): value is string {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash)
       return false;
-    return source === "modrinth"
-      ? url.hostname === "cdn.modrinth.com"
-      : source === "curseforge"
-      ? url.hostname.endsWith(".forgecdn.net")
-      : ["api.spiget.org", "cdn.spiget.org"].includes(url.hostname);
+    // MCIM proxies the two CDNs above, and the mod manager preference decides
+    // whether its mirror or the upstream host is tried first.
+    const upstream =
+      source === "modrinth"
+        ? url.hostname === "cdn.modrinth.com"
+        : source === "curseforge"
+        ? url.hostname.endsWith(".forgecdn.net")
+        : ["api.spiget.org", "cdn.spiget.org"].includes(url.hostname);
+    return upstream || (source !== "spigotmc" && isMirrorDownloadUrl(value));
   } catch {
     return false;
   }
@@ -415,7 +424,7 @@ export async function executeModTool(
   }
   const offset = integer(args.offset, 0, 0, 100000);
   const limit = integer(args.limit, 10, 1, 20);
-  const service = catalog(ctx);
+  const service = await catalog(ctx);
   if (name === "list_mod_game_versions") {
     const search = input(args.search ?? "", 40);
     const versions = await service.getMinecraftVersions();
@@ -524,11 +533,14 @@ export async function executeModTool(
       : candidates.find((file: ObjectValue) => file.filename === args.fileName);
   if (!file) fail("AI_INVALID_TOOL");
   // Only mirror the same artifact, never fall back to another classifier's JAR.
+  // The catalog already ordered both hosts by the mod manager preference.
   const fallbackUrl =
     source === "spigotmc"
       ? candidates.find(
           (entry: ObjectValue) => entry.filename === file.filename && entry.url !== file.url
         )?.url
+      : downloadUrl(file.fallbackUrl, source)
+      ? file.fallbackUrl
       : undefined;
   const type = choice(args.projectType, ["mod", "plugin"], projectType(version, source));
   const overview = await access.remote(instance!.daemonId).request("info/overview");
