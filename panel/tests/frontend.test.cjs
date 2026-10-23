@@ -162,6 +162,11 @@ function sidebar(api = {}, moduleOverrides = {}, props = {}) {
         () =>
           props.modelValue ? h("div", slots.default?.()) : null
     }),
+    VNavigationDrawer: defineComponent({
+      props: ["modelValue"],
+      emits: ["update:modelValue"],
+      setup: (props, { slots }) => () => h("aside", { hidden: !props.modelValue }, slots.default?.())
+    }),
     VBtn: defineComponent({
       props: ["disabled", "type"],
       setup:
@@ -255,11 +260,12 @@ function sidebar(api = {}, moduleOverrides = {}, props = {}) {
   };
 }
 
-test("desktop chat initializes and sends messages without opening a sidebar dialog", async (t) => {
+test("desktop chat initializes and sends messages without opening a sidebar drawer", async (t) => {
   const f = sidebar({}, {}, { desktop: true });
   t.after(() => f.wrapper.unmount());
   await flushPromises();
   assert.equal(f.wrapper.findComponent(f.components.VDialog).exists(), false);
+  assert.equal(f.wrapper.findComponent(f.components.VNavigationDrawer).exists(), false);
   assert.ok(f.wrapper.find("#epanel-plugin-elements-ai-desktop").exists());
   assert.equal(f.wrapper.find('[aria-label="AI_CLOSE"]').exists(), false);
   await f.wrapper.get("textarea").setValue("List my instances");
@@ -1765,6 +1771,7 @@ test("the settings shortcut selects this plugin even when configuration is alrea
         }
       },
       "vue-router": { useRoute: () => route, useRouter: () => ({}), onBeforeRouteLeave() {} },
+      "@/hooks/useScreen": { useScreen: () => ({ isPhone: vue.ref(false) }) },
       "@/lang/i18n": { t: (key) => key },
       "@/plugin/context": { ctx: {} },
       "@/tools/validator": {},

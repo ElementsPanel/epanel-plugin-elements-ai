@@ -6,8 +6,8 @@ import {
   VAlert,
   VBtn,
   VCard,
-  VDialog,
   VIcon,
+  VNavigationDrawer,
   VProgressCircular,
   VProgressLinear,
   VSelect,
@@ -50,8 +50,16 @@ const containerProps = computed(() =>
         modelValue: props.state.open,
         "onUpdate:modelValue": (value: boolean) => { props.state.open = value; },
         class: "ai-drawer",
-        maxWidth: 480,
-        transition: "slide-x-reverse-transition",
+        location: "right",
+        width: 480,
+        temporary: true,
+        floating: true,
+        disableRouteWatcher: true,
+        disableResizeWatcher: true,
+        touchless: true,
+        retainFocus: true,
+        captureFocus: true,
+        tag: "aside",
         "aria-label": t("AI_TITLE")
       }
 );
@@ -688,7 +696,7 @@ onBeforeUnmount(() => reset(true));
 </script>
 
 <template>
-  <component :is="desktop ? 'div' : VDialog" v-bind="containerProps">
+  <component :is="desktop ? 'div' : VNavigationDrawer" v-bind="containerProps">
     <VCard :id="desktop ? 'epanel-plugin-elements-ai-desktop' : 'epanel-plugin-elements-ai-sidebar'"
       :title="t('AI_TITLE')" class="ai-card" rounded="0">
       <template #append>
@@ -1147,23 +1155,14 @@ onBeforeUnmount(() => reset(true));
   height: 100%;
   min-height: 0;
 }
-.ai-drawer :deep(.v-overlay__content) {
-  right: 0;
-  margin: 0 !important;
-  width: min(480px, 100vw) !important;
-  max-width: 100vw !important;
-  height: 100dvh;
-  max-height: 100dvh !important;
-  border-top-right-radius: 0 !important;
-  border-bottom-right-radius: 0 !important;
+.ai-drawer :deep(.v-navigation-drawer__content) {
+  overflow: hidden;
 }
 .ai-card {
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-top-right-radius: 0 !important;
-  border-bottom-right-radius: 0 !important;
 }
 .ai-card > :deep(.v-card-item) {
   flex: 0 0 auto;
@@ -1659,13 +1658,6 @@ onBeforeUnmount(() => reset(true));
   text-align: right;
   white-space: nowrap;
   pointer-events: none;
-}
-@media (max-width: 480px) {
-  .ai-drawer :deep(.v-overlay__content),
-  .ai-drawer :deep(.ai-card) {
-    border-top-left-radius: 0 !important;
-    border-bottom-left-radius: 0 !important;
-  }
 }
 @media (max-width: 360px) {
   .ai-card > :deep(.v-card-item) {
