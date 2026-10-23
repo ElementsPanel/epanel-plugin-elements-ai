@@ -1277,6 +1277,41 @@ test("personal settings only control sending and preserve the model selected in 
   f.wrapper.unmount();
 });
 
+for (const desktop of [false, true]) {
+  test(`empty and non-scrollable ${desktop ? "desktop" : "sidebar"} chats hide the bottom button`, async (t) => {
+    const f = sidebar({}, {}, { desktop });
+    t.after(() => f.wrapper.unmount());
+    f.state.open = true;
+    await flushPromises();
+    const messages = f.wrapper.get(".ai-messages");
+    Object.defineProperties(messages.element, {
+      scrollHeight: { configurable: true, writable: true, value: 200 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 0 }
+    });
+    for (const height of [200, 400]) {
+      messages.element.scrollHeight = height;
+      await messages.trigger("pointerdown");
+      await messages.trigger("wheel", { deltaY: -100 });
+      await messages.trigger("keydown", { key: "Home" });
+      await messages.trigger("touchstart", { touches: [{ clientY: 10 }] });
+      await messages.trigger("touchmove", { touches: [{ clientY: 50 }] });
+      assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), false);
+    }
+    await f.wrapper.get("textarea").setValue("Short conversation");
+    await f.wrapper.get("form").trigger("submit");
+    await flushPromises();
+    messages.element.scrollHeight = 200;
+    await messages.trigger("pointerdown");
+    await messages.trigger("wheel", { deltaY: -100 });
+    assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), false);
+    messages.element.scrollHeight = 1000;
+    messages.element.scrollTop = 200;
+    await messages.trigger("pointerdown");
+    assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), true);
+  });
+}
+
 test("streaming follows the conversation only while the user remains near the bottom", async (t) => {
   const pending = deferred();
   let emit;
@@ -1326,23 +1361,72 @@ test("streaming follows the conversation only while the user remains near the bo
   assert.ok(scrolls > 0);
 });
 
+for (const desktop of [false, true]) {
+  test(`a small upward wheel keeps ${desktop ? "desktop" : "sidebar"} chats from snapping back to the bottom`, async (t) => {
+    const pending = deferred();
+    let emit;
+    const f = sidebar({
+      sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+        emit = onEvent;
+        await pending.promise;
+      }
+    }, {}, { desktop });
+    t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+    f.state.open = true;
+    await flushPromises();
+    const messages = f.wrapper.get(".ai-messages");
+    const element = messages.element;
+    Object.defineProperties(element, {
+      scrollHeight: { configurable: true, writable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 800 }
+    });
+    let scrolls = 0;
+    element.scrollTo = ({ top }) => {
+      scrolls++;
+      element.scrollTop = Math.max(0, top - element.clientHeight);
+    };
+    await f.wrapper.get("textarea").setValue("Stream a reply");
+    await f.wrapper.get("form").trigger("submit");
+    await vue.nextTick();
+    paint();
+    scrolls = 0;
+    emit({ type: "message", index: 1, message: { role: "assistant", content: "First fragment" } });
+    await vue.nextTick();
+    await messages.trigger("wheel", { deltaY: -8 });
+    // The previous automatic scroll can report completion before the wheel moves the list.
+    await messages.trigger("scroll");
+    element.scrollTop = 792;
+    await messages.trigger("scroll");
+    paint();
+    assert.equal(scrolls, 0);
+    assert.equal(element.scrollTop, 792);
+    assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), true);
+    element.scrollHeight = 1200;
+    emit({ type: "delta", index: 1, content: " and more output" });
+    await vue.nextTick();
+    paint();
+    assert.equal(scrolls, 0);
+    assert.equal(element.scrollTop, 792);
+    element.scrollTop = 1000;
+    await messages.trigger("scroll");
+    paint();
+    assert.equal(f.wrapper.find(".ai-scroll-bottom").exists(), false);
+    element.scrollHeight = 1400;
+    emit({ type: "delta", index: 1, content: " followed again" });
+    await vue.nextTick();
+    paint();
+    assert.equal(element.scrollTop, 1200);
+  });
+}
+
 test("sending while scrolled up forces the latest message into view and exposes a bottom button", async (t) => {
-  const pending = deferred();
-  const f = sidebar({
-    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
-      onEvent({
-        type: "start",
-        conversationId: "a".repeat(32),
-        messages: [{ role: "user", content: "Jump to the bottom" }]
-      });
-      await pending.promise;
-    }
-  });
-  t.after(() => {
-    pending.resolve();
-    f.wrapper.unmount();
-  });
+  const f = sidebar();
+  t.after(() => f.wrapper.unmount());
   f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Existing conversation");
+  await f.wrapper.get("form").trigger("submit");
   await flushPromises();
   const messages = f.wrapper.get(".ai-messages");
   const element = messages.element;

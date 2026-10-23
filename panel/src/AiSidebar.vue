@@ -941,14 +941,18 @@ onBeforeUnmount(() => reset(true));
         <VBtn
           v-if="showScrollBottom"
           class="ai-scroll-bottom"
-          icon="mdi-chevron-down"
+          icon
           size="small"
           variant="flat"
           color="primary"
           :title="t('AI_SCROLL_BOTTOM')"
           :aria-label="t('AI_SCROLL_BOTTOM')"
+          :aria-busy="loading"
           @click="scroll(true)"
-        />
+        >
+          <VProgressCircular v-if="loading" indeterminate :size="18" :width="2" />
+          <VIcon v-else icon="mdi-chevron-down" />
+        </VBtn>
         </div>
         <Transition name="ai-download-panel">
           <div

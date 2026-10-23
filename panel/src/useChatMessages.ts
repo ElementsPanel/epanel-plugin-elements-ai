@@ -55,6 +55,8 @@ export function useChatMessages(messages: Ref<ChatMessage[]>, isOpen: () => bool
   }
 
   function pauseFollowing() {
+    const element = list.value;
+    if (!messages.value.length || !element || element.scrollHeight <= element.clientHeight) return;
     following = false;
     showScrollBottom.value = true;
     cancelScroll();
@@ -87,8 +89,11 @@ export function useChatMessages(messages: Ref<ChatMessage[]>, isOpen: () => bool
     const element = list.value;
     if (!element || restoring) return;
     const movedUp = element.scrollTop < lastTop;
+    const movedDown = element.scrollTop > lastTop;
     const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD;
-    if (nearBottom) {
+    // Upward input pauses before native scrolling runs. A delayed scroll event
+    // near the bottom must not resume following until the reader moves down.
+    if (nearBottom && (following || movedDown || element.scrollHeight <= element.clientHeight)) {
       following = true;
       showScrollBottom.value = false;
       recentMessages();
