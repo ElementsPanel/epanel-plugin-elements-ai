@@ -41,8 +41,20 @@ import type {
   ToolProgress
 } from "./types";
 
-const props = defineProps<{ state: { open: boolean } }>();
+const props = defineProps<{ state: { open: boolean }; desktop?: boolean }>();
 const { t, locale } = useI18n();
+const containerProps = computed(() =>
+  props.desktop
+    ? { class: "ai-desktop" }
+    : {
+        modelValue: props.state.open,
+        "onUpdate:modelValue": (value: boolean) => { props.state.open = value; },
+        class: "ai-drawer",
+        maxWidth: 480,
+        transition: "slide-x-reverse-transition",
+        "aria-label": t("AI_TITLE")
+      }
+);
 const route = useRoute();
 const router = useRouter();
 const status = ref<AiStatus>();
@@ -655,7 +667,8 @@ watch(
     } else {
       cancelScroll();
     }
-  }
+  },
+  { immediate: props.desktop }
 );
 watch(
   () => route.path,
@@ -675,14 +688,9 @@ onBeforeUnmount(() => reset(true));
 </script>
 
 <template>
-  <VDialog
-    v-model="state.open"
-    class="ai-drawer"
-    max-width="480"
-    transition="slide-x-reverse-transition"
-    :aria-label="t('AI_TITLE')"
-  >
-    <VCard id="epanel-plugin-elements-ai-sidebar" :title="t('AI_TITLE')" class="ai-card" rounded="0">
+  <component :is="desktop ? 'div' : VDialog" v-bind="containerProps">
+    <VCard :id="desktop ? 'epanel-plugin-elements-ai-desktop' : 'epanel-plugin-elements-ai-sidebar'"
+      :title="t('AI_TITLE')" class="ai-card" rounded="0">
       <template #append>
         <VBtn
           icon="mdi-chat-plus-outline"
@@ -720,6 +728,7 @@ onBeforeUnmount(() => reset(true));
           "
         />
         <VBtn
+          v-if="!desktop"
           icon="mdi-close"
           size="small"
           variant="text"
@@ -1126,10 +1135,14 @@ onBeforeUnmount(() => reset(true));
         </div>
       </Transition>
     </VCard>
-  </VDialog>
+  </component>
 </template>
 
 <style scoped>
+.ai-desktop {
+  height: 100%;
+  min-height: 0;
+}
 .ai-drawer :deep(.v-overlay__content) {
   right: 0;
   margin: 0 !important;

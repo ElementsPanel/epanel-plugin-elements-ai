@@ -77,8 +77,8 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-function sidebar(api = {}, moduleOverrides = {}) {
-  const state = vue.reactive({ open: false });
+function sidebar(api = {}, moduleOverrides = {}, props = {}) {
+  const state = vue.reactive({ open: Boolean(props.desktop) });
   const route = vue.reactive({ path: "/instances" });
   const navigations = [];
   const calls = [];
@@ -244,7 +244,7 @@ function sidebar(api = {}, moduleOverrides = {}) {
     component.content
   ).default;
   return {
-    wrapper: mount(entry, { props: { state } }),
+    wrapper: mount(entry, { props: { state, ...props } }),
     state,
     route,
     navigations,
@@ -254,6 +254,21 @@ function sidebar(api = {}, moduleOverrides = {}) {
     AccountChangedError
   };
 }
+
+test("desktop chat initializes and sends messages without opening a sidebar dialog", async (t) => {
+  const f = sidebar({}, {}, { desktop: true });
+  t.after(() => f.wrapper.unmount());
+  await flushPromises();
+  assert.equal(f.wrapper.findComponent(f.components.VDialog).exists(), false);
+  assert.ok(f.wrapper.find("#epanel-plugin-elements-ai-desktop").exists());
+  assert.equal(f.wrapper.find('[aria-label="AI_CLOSE"]').exists(), false);
+  await f.wrapper.get("textarea").setValue("List my instances");
+  await f.wrapper.get("form").trigger("submit");
+  await flushPromises();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0][0], "List my instances");
+  assert.equal(f.calls[0][2], "preset:default");
+});
 
 test("sidebar respects IME/Shift+Enter and displays model text without HTML execution", async () => {
   const f = sidebar();
