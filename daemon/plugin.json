@@ -1,6 +1,6 @@
 {
   "id": "epanel-plugin-elements-ai",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "dual": true,
   "backend": "src/backend/index.ts"
 }
