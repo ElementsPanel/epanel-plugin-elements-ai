@@ -81,6 +81,7 @@ test("Docker progress endpoint preserves legacy response and exposes opt-in deta
   let response;
   load(path.join(serviceDir, "../routers/environment_router.ts"), {
     "../i18n": { $t: (key) => key },
+    "../plugin/context": { ctx: {} },
     "../service/docker_service": { DockerManager },
     "../service/log": { info() {} },
     "../service/protocol": { response(_ctx, value) { response = value; }, responseError(_ctx, error) { throw error; } },
