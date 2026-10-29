@@ -623,7 +623,7 @@ function keydown(event: KeyboardEvent) {
 function settings() {
   if (!status.value?.admin) return;
   props.state.open = false;
-  void router.push({ path: "/plugins/config", query: { scope: "panel", plugin: "epanel-plugin-elements-ai" } });
+  void router.push({ path: "/plugins/config", query: { scope: "panel", plugin: "elements-ai" } });
 }
 
 function changeModel(value: string) {

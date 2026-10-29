@@ -1,4 +1,4 @@
-import { validatePluginSettings } from "mcsmanager-common";
+import { validatePluginSettings } from "./catalog/settings_validation";
 import type {
   PanelPluginContext,
   PanelSettingField,

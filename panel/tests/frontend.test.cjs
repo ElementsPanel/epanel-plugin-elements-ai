@@ -303,7 +303,7 @@ test("sidebar respects IME/Shift+Enter and displays model text without HTML exec
   assert.equal(f.wrapper.get('[aria-label="AI_SETTINGS"]').attributes("type"), "button");
   await f.wrapper.get('[aria-label="AI_SETTINGS"]').trigger("click");
   assert.deepEqual(f.navigations, [
-    { path: "/plugins/config", query: { scope: "panel", plugin: "epanel-plugin-elements-ai" } }
+    { path: "/plugins/config", query: { scope: "panel", plugin: "elements-ai" } }
   ]);
   f.wrapper.unmount();
 });

@@ -1,5 +1,5 @@
 {
-  "id": "epanel-plugin-elements-ai",
+  "id": "elements-ai",
   "name": "Elements AI",
   "displayName": "Elements AI",
   "version": "1.0.0",
@@ -7,10 +7,13 @@
   "description": "让 Agent 接管面板。",
   "category": "tools",
   "priority": 100,
-  "backend": "src/backend/index.ts",
-  "frontend": "src/frontend.ts",
+  "backend": "backend/index.cjs",
+  "frontend": "frontend/index.js",
   "frontendInject": [
     "console",
     "user"
+  ],
+  "styles": [
+    "frontend/assets/style.css"
   ]
 }

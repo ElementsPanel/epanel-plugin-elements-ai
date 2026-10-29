@@ -1,5 +1,5 @@
-import { MslMirrorsService } from "../../../../../panel/plugins/instance/src/backend/service/msl_mirrors";
-import { MINECRAFT_SERVERS } from "../../../../../panel/plugins/instance/src/minecraft";
+import { MslMirrorsService } from "./catalog/msl_mirrors";
+import { MINECRAFT_SERVERS } from "./catalog/minecraft";
 
 export { MslMirrorsService, MINECRAFT_SERVERS };
 

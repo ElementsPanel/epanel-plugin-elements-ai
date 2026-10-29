@@ -1,7 +1,7 @@
 import type { PanelPluginContext } from "../../../../../panel/src/app/plugin";
-import { ModManagerService } from "../../../../../panel/plugins/mod/src/backend/mod_manager";
-import { isMirrorDownloadUrl } from "../../../../../panel/plugins/mod/src/backend/mcim";
-import { loadSourcePreference } from "../../../../../panel/plugins/mod/src/backend/settings";
+import { ModManagerService } from "./catalog/mod_manager";
+import { isMirrorDownloadUrl } from "./catalog/mcim";
+import { loadSourcePreference } from "./catalog/settings";
 import type { ToolProgress } from "../types";
 import { DOWNLOAD_WAIT_TIMEOUT_MS } from "../timing";
 
