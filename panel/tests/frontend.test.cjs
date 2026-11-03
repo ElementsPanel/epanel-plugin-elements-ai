@@ -1043,7 +1043,7 @@ test("tool rows replace same-size spinners with distinct icons and mark only fai
   assert.equal(completed.length, tools.length);
   assert.equal(f.wrapper.findAll('.ai-tool [role="progressbar"]').length, 0);
   const iconFont = fs.readFileSync(
-    path.join(root, "frontend/node_modules/@mdi/font/css/materialdesignicons.css"),
+    frontendRequire.resolve("@mdi/font/css/materialdesignicons.css"),
     "utf8"
   );
   const icons = [];
@@ -1066,6 +1066,49 @@ test("tool rows replace same-size spinners with distinct icons and mark only fai
   pending.resolve();
   await flushPromises();
   f.wrapper.unmount();
+});
+
+test("failed tool details open automatically and render error text safely", async (t) => {
+  const pending = deferred();
+  let emit;
+  const f = sidebar({
+    sendMessage: async (_message, _conversation, _model, _user, _signal, onEvent) => {
+      emit = onEvent;
+      await pending.promise;
+    }
+  });
+  t.after(() => { pending.resolve(); f.wrapper.unmount(); });
+  f.state.open = true;
+  await flushPromises();
+  await f.wrapper.get("textarea").setValue("Start this instance");
+  await f.wrapper.get("form").trigger("submit");
+  emit({ type: "message", index: 1,
+    message: { role: "tool", tool: "control_instance", pending: true, content: "" } });
+  await vue.nextTick();
+  const row = f.wrapper.get(".ai-tool");
+  assert.equal(row.element.open, false);
+  const content = JSON.stringify({ tool: "control_instance",
+    error: "[node-a / instance/open] EACCES: permission denied\n<script>alert(1)</script>" });
+  emit({ type: "message", index: 1,
+    message: { role: "tool", tool: "control_instance", pending: false, ok: false, content } });
+  await vue.nextTick();
+  assert.equal(row.element.open, true);
+  assert.equal(row.get("pre").text(), content);
+  assert.equal(row.find("script").exists(), false);
+  const downloadError = "ENOSPC: no space left on device\n<script>alert(1)</script>";
+  emit({ type: "download", action: "upsert", task: {
+    id: "mod:failed", tool: "download_mod", state: "failed", error: downloadError
+  } });
+  await vue.nextTick();
+  assert.equal(f.wrapper.get(".ai-download-error").text(), downloadError);
+  assert.equal(f.wrapper.get(".ai-download-error").find("script").exists(), false);
+  emit({ type: "message", index: 2,
+    message: { role: "tool", tool: "get_instance", pending: false, ok: true, content: "Success" } });
+  await vue.nextTick();
+  assert.equal(f.wrapper.findAll(".ai-tool")[1].element.open, false);
+  emit({ type: "done", conversationId: "id" });
+  pending.resolve();
+  await flushPromises();
 });
 
 for (const tool of ["edit_file", "create_file"])

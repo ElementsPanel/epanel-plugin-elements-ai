@@ -35,6 +35,7 @@
   "AI_INTERRUPTED": "İstek kesildi.",
   "AI_MODEL_LOOP_DETECTED": "Model sonsuz bir döngüye girmiş olabilir. Görev durduruldu.",
   "AI_OPERATION_FAILED": "Panel işlemi başarısız veya sonucu belirsiz. Tekrar denemeden önce örneği kontrol edin.",
+  "AI_TOOL_ERROR_NO_DETAIL": "Sunucu hata ayrıntısı döndürmedi. Belirtilen araç ve düğüm işlemi için panel veya düğüm günlüklerini kontrol edin.",
   "AI_PROVIDER_FAILED": "Yapay zekâ hizmeti başarısız oldu, zaman aşımına uğradı veya geçersiz yanıt verdi. Uç noktayı, anahtarı, modeli ve araç desteğini kontrol edin. Tamamlanan işlemler yukarıdadır.",
   "AI_MODEL_INCOMPETENT": "Bu modelin zekâsı sunucu yönetimi görevleri için yetersiz olabilir.\nBu sorun sık sık yaşanıyorsa farklı bir modele geçin.",
   "AI_ACCOUNT_CHANGED": "Hesap değişti veya oturum kapandı. Yeni sohbet için asistanı yeniden açın.",

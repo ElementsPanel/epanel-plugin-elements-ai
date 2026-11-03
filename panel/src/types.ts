@@ -32,6 +32,7 @@ export interface DownloadActivity {
   tool: string;
   progress?: ToolProgress;
   state?: string;
+  error?: string;
 }
 
 export interface ChatMessage {

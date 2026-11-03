@@ -7,6 +7,7 @@ import { MslMirrorsService, MINECRAFT_SERVERS, mslDefinitions } from "./msl";
 import { terminalText } from "./terminal";
 import { executeModTool, modDefinitions } from "./mods";
 import { executePluginConfigTool, pluginConfigDefinitions } from "./plugin_config";
+import { toolErrorDetail } from "./tool_error";
 
 export type RequestContext = Parameters<PanelPluginContext["identity"]["of"]>[0];
 
@@ -349,8 +350,16 @@ export class PanelTools {
     private request: RequestContext
   ) {}
 
-  private fail(key: string): never {
-    throw new ToolError(this.ctx.i18n.$t(key));
+  errorDetail(error: unknown, secrets: readonly string[] = []): string {
+    const nodeKeys = Array.from(this.ctx.remote.services.services.values(), (node) => node.config.apiKey)
+      .filter((key): key is string => typeof key === "string");
+    return toolErrorDetail(error, this.ctx.i18n.$t("AI_TOOL_ERROR_NO_DETAIL"), [...secrets, ...nodeKeys]);
+  }
+
+  private fail(key: string, reason?: string): never {
+    throw new ToolError(
+      reason ? `${this.ctx.i18n.$t(key)}\n${this.errorDetail(reason)}` : this.ctx.i18n.$t(key)
+    );
   }
 
   private async wait(milliseconds: number) {
@@ -455,7 +464,7 @@ export class PanelTools {
     });
     this.fileAccess(daemonId, instanceUuid);
     const entry = listing?.items?.find((item: JsonObject) => item.name === fileName);
-    if (!entry) this.fail("AI_OPERATION_FAILED");
+    if (!entry) this.fail("AI_OPERATION_FAILED", `File not found: ${path}`);
     if (
       entry.type !== 1 ||
       !Number.isFinite(entry.size) ||
@@ -492,7 +501,7 @@ export class PanelTools {
         name === "create_file" ? "file/create-text" : "file/remove-file",
         { instanceUuid, target: path, ...(content === undefined ? {} : { text: content }) }
       );
-      if (result !== true) this.fail("AI_OPERATION_FAILED");
+      if (result !== true) this.fail("AI_OPERATION_FAILED", `${name}: the node did not confirm the file operation.`);
       this.fileReads.delete(JSON.stringify([daemonId, instanceUuid, path]));
       this.ctx.operations.log(
         name === "create_file" ? "instance_file_update" : "instance_file_delete",
@@ -575,7 +584,7 @@ export class PanelTools {
       target: path,
       text: content
     });
-    if (result !== true) this.fail("AI_OPERATION_FAILED");
+    if (result !== true) this.fail("AI_OPERATION_FAILED", "file/edit: the node did not confirm that the file was saved.");
     this.ctx.operations.log("instance_file_update", {
       daemon_id: daemonId,
       instance_id: instanceUuid,
@@ -597,12 +606,14 @@ export class PanelTools {
       Array.isArray(value) ||
       Object.getPrototypeOf(value) !== Object.prototype
     )
-      this.fail("AI_INVALID_TOOL");
+      this.fail("AI_INVALID_TOOL", "Expected tool arguments to be a JSON object.");
     return value as JsonObject;
   }
 
   private keys(value: JsonObject, allowed: string[]) {
-    if (Object.keys(value).some((key) => !allowed.includes(key))) this.fail("AI_INVALID_TOOL");
+    const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+    if (unknown.length)
+      this.fail("AI_INVALID_TOOL", `Unsupported argument(s): ${unknown.join(", ")}. Allowed: ${allowed.join(", ") || "none"}.`);
   }
 
   private id(value: unknown): string {
@@ -612,7 +623,7 @@ export class PanelTools {
       value.length > 200 ||
       /[\u0000-\u001f]/.test(value)
     )
-      this.fail("AI_INVALID_TOOL");
+      this.fail("AI_INVALID_TOOL", "Expected a non-empty ID string of at most 200 characters, without control characters.");
     return value;
   }
 
@@ -632,8 +643,18 @@ export class PanelTools {
 
   private remote(daemonId: string) {
     const node = this.ctx.remote.services.getInstance(daemonId);
-    if (!node?.available) this.fail("AI_NODE_UNAVAILABLE");
-    return new this.ctx.remote.Request(node);
+    if (!node?.available) this.fail("AI_NODE_UNAVAILABLE", `daemonId: ${daemonId}`);
+    const remote = new this.ctx.remote.Request(node);
+    return {
+      request: async (...args: Parameters<typeof remote.request>) => {
+        try {
+          return await remote.request(...args);
+        } catch (error) {
+          // Preserve the operation, but keep the raw request and its credentials private.
+          throw new Error(`[${daemonId} / ${args[0]}] ${this.errorDetail(error)}`);
+        }
+      }
+    };
   }
 
   private instanceCommand(args: JsonObject) {
@@ -668,7 +689,7 @@ export class PanelTools {
       result.err !== undefined ||
       result.error !== undefined
     )
-      this.fail("AI_OPERATION_FAILED");
+      this.fail("AI_OPERATION_FAILED", "instance/command: the node returned an invalid or mismatched acknowledgement; command dispatch is unconfirmed.");
     return { daemonId, instanceUuid, sent: true };
   }
 
@@ -689,7 +710,7 @@ export class PanelTools {
       ]) : request);
       this.access(daemonId, instanceUuid);
       if (this.identity().uuid !== userId) this.fail("AI_FORBIDDEN");
-      if (typeof output !== "string") this.fail("AI_OPERATION_FAILED");
+      if (typeof output !== "string") this.fail("AI_OPERATION_FAILED", "instance/outputlog: expected terminal text from the node.");
       return output;
     } finally {
       if (abort) signal?.removeEventListener("abort", abort);
@@ -731,14 +752,14 @@ export class PanelTools {
   private javaSummary(runtime: JsonObject) {
     const info = runtime?.info;
     if (!info || typeof info !== "object" || typeof info.fullname !== "string")
-      this.fail("AI_OPERATION_FAILED");
+      this.fail("AI_OPERATION_FAILED", "java_manager: the response is missing runtime info.fullname.");
     return {
       id: info.fullname,
       name: typeof info.name === "string" ? info.name : undefined,
       version: typeof info.version === "string" ? info.version : undefined,
       downloading: info.downloading === true,
       ...(Number.isFinite(info.progress) ? { progress: info.progress } : {}),
-      ...(typeof info.error === "string" && info.error ? { error: info.error } : {})
+      ...(typeof info.error === "string" && info.error ? { error: this.errorDetail(info.error) } : {})
     };
   }
 
@@ -762,7 +783,7 @@ export class PanelTools {
         const current = this.identity();
         if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
       }
-      if (!Array.isArray(result)) this.fail("AI_OPERATION_FAILED");
+      if (!Array.isArray(result)) this.fail("AI_OPERATION_FAILED", "java_manager/list: expected a runtime list from the node.");
       return result.map((runtime: JsonObject) => this.javaSummary(runtime));
     }
     if (name === "list_java_versions") {
@@ -771,7 +792,7 @@ export class PanelTools {
       const daemonId = this.id(args.daemonId);
       const result = await this.remote(daemonId).request("java_manager/catalog");
       this.identity();
-      if (!result || !Array.isArray(result.versions)) this.fail("AI_OPERATION_FAILED");
+      if (!result || !Array.isArray(result.versions)) this.fail("AI_OPERATION_FAILED", "java_manager/catalog: the response is missing the versions list.");
       return {
         source: "MSL",
         platform: result.platform,
@@ -805,9 +826,9 @@ export class PanelTools {
         const list = await this.remote(daemonId).request("java_manager/list");
         const checked = this.identity();
         if (!checked.elevated || checked.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
-        if (!Array.isArray(list)) this.fail("AI_OPERATION_FAILED");
+        if (!Array.isArray(list)) this.fail("AI_OPERATION_FAILED", "java_manager/list: expected a runtime list from the node.");
         const runtime = list.find((entry: JsonObject) => entry?.info?.fullname === javaId);
-        if (!runtime) this.fail("AI_OPERATION_FAILED");
+        if (!runtime) this.fail("AI_OPERATION_FAILED", "java_manager/list: the requested runtime ID was not found on this node.");
         const summary = this.javaSummary(runtime);
         return {
           daemonId,
@@ -829,7 +850,7 @@ export class PanelTools {
           value: status.state === "completed" ? 100 : status.progress
         });
       }
-      if (status.state === "running") this.fail("AI_OPERATION_FAILED");
+      if (status.state === "running") this.fail("AI_OPERATION_FAILED", "Timed out waiting for the Java installation to finish; it may still be running.");
       return status;
     }
     this.keys(args, [...Object.keys(target), "javaId"]);
@@ -842,7 +863,7 @@ export class PanelTools {
       id: javaId
     });
     this.access(daemonId, instanceUuid);
-    if (result !== true) this.fail("AI_OPERATION_FAILED");
+    if (result !== true) this.fail("AI_OPERATION_FAILED", "java_manager/using: the node did not confirm the runtime selection.");
     this.ctx.operations.log("instance_config_change", {
       daemon_id: daemonId,
       instance_id: instanceUuid,
@@ -900,7 +921,7 @@ export class PanelTools {
       typeof result.truncated !== "boolean" ||
       typeof result.timedOut !== "boolean"
     )
-      this.fail("AI_OPERATION_FAILED");
+      this.fail("AI_OPERATION_FAILED", "elements_ai/execute_command: the node returned an invalid command result (platform, exitCode, content, truncated or timedOut).");
     return {
       daemonId,
       platform: result.platform,
@@ -923,7 +944,7 @@ export class PanelTools {
       });
       this.identity();
       if (!result || result.instanceUuid !== instanceUuid || result.deleted !== true)
-        this.fail("AI_OPERATION_FAILED");
+        this.fail("AI_OPERATION_FAILED", "instance/delete-directory: the node did not confirm deletion for the requested instance.");
       this.ctx.operations.log("instance_file_delete", {
         daemon_id: daemonId,
         instance_id: instanceUuid,
@@ -941,7 +962,7 @@ export class PanelTools {
     const removed = Array.isArray(result?.instances)
       ? result.instances.some((entry: JsonObject) => entry.instanceUuid === instanceUuid)
       : false;
-    if (!removed) this.fail("AI_OPERATION_FAILED");
+    if (!removed) this.fail("AI_OPERATION_FAILED", "instance/delete: the requested instance is missing from the node's deletion receipt.");
     this.ctx.operations.log("instance_delete", {
       daemon_id: daemonId,
       instance_id: instanceUuid,
@@ -1035,7 +1056,7 @@ export class PanelTools {
         });
         check();
         this.access(target.daemonId, target.instanceUuid);
-        if (!Array.isArray(tasks)) this.fail("AI_OPERATION_FAILED");
+        if (!Array.isArray(tasks)) this.fail("AI_OPERATION_FAILED", "instance/query_asynchronous: expected a list of Minecraft installation tasks.");
         const task = tasks.find((entry: JsonObject) => entry.taskId === taskId);
         if (!task) return { ...target, taskId, state: "unknown", downloadProgress: {} };
         if (task.detail?.instanceUuid !== target.instanceUuid) this.fail("AI_FORBIDDEN");
@@ -1065,7 +1086,7 @@ export class PanelTools {
           state,
           downloadProgress,
           ...(state === "failed"
-            ? { error: this.ctx.i18n.$t("AI_OPERATION_FAILED") }
+            ? { error: this.errorDetail(task.detail?.error ?? task.error) }
             : {})
         };
       };
@@ -1102,7 +1123,8 @@ export class PanelTools {
           unknownSince = 0;
         }
       }
-      if (["running", "unknown"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
+      if (["running", "unknown"].includes(status.state))
+        this.fail("AI_OPERATION_FAILED", `MSL installation did not reach a terminal result; last task state: ${status.state}.`);
       return status;
     }
     if (name === "get_msl_download_status") {
@@ -1116,7 +1138,7 @@ export class PanelTools {
         });
         check();
         this.fileAccess(target.daemonId, target.instanceUuid);
-        if (typeof detail?.config?.cwd !== "string") this.fail("AI_OPERATION_FAILED");
+        if (typeof detail?.config?.cwd !== "string") this.fail("AI_OPERATION_FAILED", "instance/detail: the response is missing the instance working directory config.cwd.");
         const expectedPath = `${detail.config.cwd.replace(/\\/g, "/").replace(/\/$/, "")}/${path}`;
         const transferStatus = await this.remote(daemonId!).request("file/status", {
           instanceUuid: target.instanceUuid
@@ -1134,6 +1156,7 @@ export class PanelTools {
             state: task.status === 1 ? "completed" : task.status === 2 ? "failed" : "running",
             downloadedBytes: Number(task.current) || 0,
             totalBytes: Number(task.total) || 0,
+            ...(task.status === 2 ? { error: this.errorDetail(task.error ?? task.err) } : {}),
             checksumVerified: false
           };
         const files = await this.remote(daemonId!).request("file/list", {
@@ -1188,7 +1211,8 @@ export class PanelTools {
           unknownSince = 0;
         }
       }
-      if (["running", "unknown"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
+      if (["running", "unknown"].includes(status.state))
+        this.fail("AI_OPERATION_FAILED", `MSL download did not reach a terminal result; last task state: ${status.state}.`);
       return status;
     }
     if (
@@ -1227,7 +1251,7 @@ export class PanelTools {
         ifIdle: true
       });
       if (!accepted || typeof accepted !== "object" || Array.isArray(accepted))
-        this.fail("AI_OPERATION_FAILED");
+        this.fail("AI_OPERATION_FAILED", "file/download_from_url: the node returned no valid download acknowledgement.");
       this.ctx.operations.log("instance_file_download_from_url", {
         daemon_id: daemonId!,
         instance_id: target.instanceUuid,
@@ -1292,7 +1316,7 @@ export class PanelTools {
       typeof result?.taskId !== "string" ||
       !result.taskId
     )
-      this.fail("AI_OPERATION_FAILED");
+      this.fail("AI_OPERATION_FAILED", "instance/asynchronous: the installation receipt is missing instanceUuid or taskId.");
     this.ctx.operations.log("instance_create", {
       daemon_id: daemonId!,
       instance_id: result.instanceUuid,
@@ -1390,7 +1414,8 @@ export class PanelTools {
     onProgress?: (progress: ToolProgress) => void | Promise<void>
   ): Parameters<typeof executeModTool>[3] {
     return {
-      fail: (key: string) => this.fail(key),
+      fail: (key: string, reason?: string) => this.fail(key, reason),
+      errorDetail: (error: unknown) => this.errorDetail(error),
       check: (target?: { daemonId: string; instanceUuid: string }) => {
         if (this.identity().uuid !== identity.uuid || !this.filesAllowed())
           this.fail("AI_FORBIDDEN");
@@ -1460,7 +1485,8 @@ export class PanelTools {
         unknownSince = undefined;
       }
     }
-    if (["running", "unknown"].includes(status.state)) this.fail("AI_OPERATION_FAILED");
+    if (["running", "unknown"].includes(status.state))
+      this.fail("AI_OPERATION_FAILED", `Mod download did not reach a terminal result; last task state: ${status.state}.`);
     return status;
   }
 
@@ -1495,7 +1521,7 @@ export class PanelTools {
     if (name === "list_docker_images") {
       const images = await this.remote(daemonId).request("environment/images", {});
       check();
-      if (!Array.isArray(images)) this.fail("AI_OPERATION_FAILED");
+      if (!Array.isArray(images)) this.fail("AI_OPERATION_FAILED", "environment/images: expected a Docker image list from the node.");
       return {
         daemonId,
         images: images.map((item: JsonObject) => ({
@@ -1519,7 +1545,7 @@ export class PanelTools {
         dockerFile: `FROM ${image}\n`
       });
       check();
-      if (result !== true) this.fail("AI_OPERATION_FAILED");
+      if (result !== true) this.fail("AI_OPERATION_FAILED", "environment/new_image: the node did not confirm that the Docker image build was accepted.");
       return {
         daemonId,
         taskId: localImage,
@@ -1596,7 +1622,7 @@ export class PanelTools {
           item.RepoDigests?.includes(image)
       )
     )
-      this.fail("AI_OPERATION_FAILED");
+      this.fail("AI_OPERATION_FAILED", "environment/images: the requested Docker image is not available locally on this node.");
     const result = await this.remote(daemonId).request("instance/new", {
       ...config,
       startCommand: config.startCommand ?? "",
@@ -1612,7 +1638,7 @@ export class PanelTools {
       }
     });
     if (!result || typeof result.instanceUuid !== "string" || !result.instanceUuid)
-      this.fail("AI_OPERATION_FAILED");
+      this.fail("AI_OPERATION_FAILED", "instance/new: the Docker instance creation receipt is missing instanceUuid.");
     this.ctx.operations.log("instance_create", {
       daemon_id: daemonId,
       instance_id: result.instanceUuid,
@@ -1656,14 +1682,14 @@ export class PanelTools {
         const progress = await this.remote(daemonId).request("environment/progress", { details: true });
         check();
         if (!progress || typeof progress !== "object" || Array.isArray(progress))
-          this.fail("AI_OPERATION_FAILED");
+          this.fail("AI_OPERATION_FAILED", "environment/progress: expected a Docker build progress object from the node.");
         const entry = Object.prototype.hasOwnProperty.call(progress, taskId) ? progress[taskId] : undefined;
         const detail = entry && typeof entry === "object" && !Array.isArray(entry) ? entry : undefined;
         const code = detail ? detail.status : entry;
         const percentage = detail && typeof detail.percentage === "number" && Number.isFinite(detail.percentage)
           ? Math.max(0, Math.min(99, detail.percentage)) : undefined;
         const bytes = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-        if (code !== undefined && ![1, 2, -1].includes(code)) this.fail("AI_OPERATION_FAILED");
+        if (code !== undefined && ![1, 2, -1].includes(code)) this.fail("AI_OPERATION_FAILED", "environment/progress: the node returned an unsupported Docker build status.");
         const state =
           code === 1 ? "running" : code === 2 ? "completed" : code === -1 ? "failed" : "unknown";
         if (state === "completed") {
@@ -1673,13 +1699,13 @@ export class PanelTools {
             !Array.isArray(images) ||
             !images.some((item: JsonObject) => item.RepoTags?.includes(taskId))
           )
-            this.fail("AI_OPERATION_FAILED");
+            this.fail("AI_OPERATION_FAILED", "The Docker build reports completion, but its image tag is missing from environment/images.");
         }
         if (state === "unknown") {
           // The built-in route acknowledges before registering build progress.
           // Allow that brief race, but do not wait forever after a daemon restart.
           unknownSince ??= Date.now();
-          if (Date.now() - unknownSince >= 10_000) this.fail("AI_OPERATION_FAILED");
+          if (Date.now() - unknownSince >= 10_000) this.fail("AI_OPERATION_FAILED", "environment/progress: the Docker build task has been missing for at least 10 seconds; the node may have restarted.");
         } else unknownSince = undefined;
         result = {
           daemonId,
@@ -1689,14 +1715,14 @@ export class PanelTools {
           progress: state === "completed" ? 100 : percentage,
           downloadedBytes: bytes(detail?.downloadedBytes),
           totalBytes: bytes(detail?.totalBytes),
-          ...(state === "failed" ? { error: typeof detail?.error === "string" ? detail.error.slice(0, 2000) : this.ctx.i18n.$t("AI_OPERATION_FAILED") } : {})
+          ...(state === "failed" ? { error: this.errorDetail(detail?.error) } : {})
         };
         await this.reportProgress(onProgress, {
           value: state === "completed" ? 100 : percentage,
           downloadedBytes: bytes(detail?.downloadedBytes), totalBytes: bytes(detail?.totalBytes)
         });
         if (["completed", "failed"].includes(state) || !waitForDownloads) break;
-        if (Date.now() >= deadline) this.fail("AI_OPERATION_FAILED");
+        if (Date.now() >= deadline) this.fail("AI_OPERATION_FAILED", "Timed out waiting for the Docker image build to finish; it may still be running.");
         await this.wait(1000);
       } while (true);
     } else if (taskType === "java") {
@@ -1761,12 +1787,14 @@ export class PanelTools {
   ): Promise<unknown> {
     const args = this.object(value);
     const identity = this.identity();
-    if (
-      !toolDefinitions(identity.elevated, this.filesAllowed()).some(
-        (tool) => tool.function.name === name
-      ) && !internalDownloadStatusTools.has(name)
-    )
+    const tool = toolDefinitions(identity.elevated, this.filesAllowed()).find(
+      (tool) => tool.function.name === name
+    );
+    if (!tool && !internalDownloadStatusTools.has(name))
       this.fail("AI_FORBIDDEN");
+    const missing = tool?.function.parameters.required.filter((key) => args[key] === undefined);
+    if (missing?.length)
+      this.fail("AI_INVALID_TOOL", `Missing required argument(s): ${missing.join(", ")}.`);
     if (name === "ask_user") this.fail("AI_INVALID_TOOL");
     if (pluginConfigDefinitions.some((tool) => tool.function.name === name))
       return executePluginConfigTool(this.ctx, name, args, {
@@ -1774,7 +1802,8 @@ export class PanelTools {
           const current = this.identity();
           if (!current.elevated || current.uuid !== identity.uuid) this.fail("AI_FORBIDDEN");
         },
-        fail: (key) => this.fail(key),
+        fail: (key, reason) => this.fail(key, reason),
+        errorDetail: (error, secrets) => this.errorDetail(error, secrets),
         remote: (daemonId) => this.remote(daemonId),
         beforeWrite: beforeSensitive && (async () => {
           const scope = this.scope();

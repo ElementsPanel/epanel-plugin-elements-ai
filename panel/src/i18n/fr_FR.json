@@ -35,6 +35,7 @@
   "AI_INTERRUPTED": "La requête a été interrompue.",
   "AI_MODEL_LOOP_DETECTED": "Le modèle semble être bloqué dans une boucle infinie. La tâche a été arrêtée.",
   "AI_OPERATION_FAILED": "L’opération a échoué ou son résultat est incertain. Vérifiez l’instance avant de réessayer.",
+  "AI_TOOL_ERROR_NO_DETAIL": "Le backend n’a fourni aucun détail sur l’erreur. Consultez les journaux du panneau ou du nœud pour l’outil et l’opération indiqués.",
   "AI_PROVIDER_FAILED": "Le service IA a échoué, expiré ou répondu incorrectement. Vérifiez l’URL, la clé, le modèle et les outils pris en charge. Les opérations terminées figurent ci-dessus.",
   "AI_MODEL_INCOMPETENT": "L’intelligence de ce modèle est peut-être trop limitée pour la gestion de serveurs.\nSi ce problème se produit fréquemment, changez de modèle.",
   "AI_ACCOUNT_CHANGED": "Le compte a changé ou vous êtes déconnecté. Rouvrez l’assistant pour une nouvelle conversation.",

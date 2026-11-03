@@ -819,7 +819,7 @@ onBeforeUnmount(() => reset(true));
             :class="`ai-message--${message.role}`"
           >
             <template v-if="message.role === 'tool'">
-              <details class="ai-tool">
+              <details class="ai-tool" :open="!message.pending && message.ok === false">
                 <summary :aria-busy="message.pending || undefined">
                   <span class="ai-tool-icon">
                     <VProgressCircular
@@ -999,7 +999,7 @@ onBeforeUnmount(() => reset(true));
                         />
                         <span>{{ toolLabelFor(task.tool) }}</span>
                       </span>
-                      <span class="ai-download-detail">{{ task.state === "failed" ? t("AI_FAILED") : progressText(task.progress) || "…" }}</span>
+                      <span class="ai-download-detail" :title="task.error">{{ task.state === "failed" ? t("AI_FAILED") : progressText(task.progress) || "…" }}</span>
                     </span>
                   </span>
                 </span>
@@ -1019,8 +1019,9 @@ onBeforeUnmount(() => reset(true));
                         />
                         <span>{{ toolLabelFor(task.tool) }}</span>
                       </span>
-                      <span class="ai-download-detail">{{ task.state === "failed" ? t("AI_FAILED") : progressText(task.progress) || "…" }}</span>
+                      <span class="ai-download-detail" :title="task.error">{{ task.state === "failed" ? t("AI_FAILED") : progressText(task.progress) || "…" }}</span>
                     </div>
+                    <pre v-if="task.state === 'failed' && task.error" class="ai-download-error">{{ task.error }}</pre>
                     <VProgressLinear
                       :model-value="progressValue(task.progress) ?? 0"
                       :indeterminate="['running', 'unknown'].includes(task.state || '') && progressValue(task.progress) === undefined"
@@ -1459,6 +1460,13 @@ onBeforeUnmount(() => reset(true));
 }
 .ai-tool-name--failed {
   color: rgb(var(--v-theme-error));
+}
+.ai-download-error {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgb(var(--v-theme-error));
+  font-size: 12px;
 }
 .ai-tool summary:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));

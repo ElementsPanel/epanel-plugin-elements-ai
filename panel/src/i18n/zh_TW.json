@@ -35,6 +35,7 @@
   "AI_INTERRUPTED": "請求已中斷。",
   "AI_MODEL_LOOP_DETECTED": "模型疑似陷入無限循環，已停止任務。",
   "AI_OPERATION_FAILED": "面板操作失敗或結果不確定，請檢查實例後再決定是否重試。",
+  "AI_TOOL_ERROR_NO_DETAIL": "後端未提供具體錯誤資訊。請根據工具名稱和節點介面查看對應的面板或節點日誌。",
   "AI_PROVIDER_FAILED": "AI 服務失敗、逾時或傳回無效回應，請檢查介面、金鑰、模型和工具呼叫支援情況。已完成的操作見上方紀錄。",
   "AI_MODEL_INCOMPETENT": "該模型的智力可能比較低下，無法勝任伺服器管理工作。\n如果頻繁出現該問題，請更換一個模型。",
   "AI_ACCOUNT_CHANGED": "帳戶已切換或已登出，請重新開啟助手開始新對話。",

@@ -158,7 +158,8 @@ async function catalog(ctx: PanelPluginContext) {
 
 interface Access {
   check(target?: Target): void;
-  fail(key: string): never;
+  fail(key: string, reason?: string): never;
+  errorDetail(error: unknown): string;
   remote(daemonId: string): { request(event: string, data?: any): Promise<any> };
   log(target: Target, path: string, selection: string): void;
   signal?: AbortSignal;
@@ -335,7 +336,7 @@ export async function executeModTool(
           totalItems: items.length
         });
         if (status.state !== "running") break;
-        if (Date.now() >= deadline) fail("AI_OPERATION_FAILED");
+        if (Date.now() >= deadline) fail("AI_OPERATION_FAILED", "Timed out waiting for a batch mod download; it may still be running.");
         await waitForNextDownload(access, 250);
       } while (true);
       results.push({
@@ -373,7 +374,7 @@ export async function executeModTool(
       folder: folder === "all" ? "" : folder
     });
     check(instance);
-    if (!Array.isArray(result?.mods)) fail("AI_OPERATION_FAILED");
+    if (!Array.isArray(result?.mods)) fail("AI_OPERATION_FAILED", "instance/mods/list: the response is missing the mods list.");
     return {
       ...instance,
       page,
@@ -402,7 +403,7 @@ export async function executeModTool(
       result?.taskId !== taskId ||
       !["running", "completed", "failed", "unknown"].includes(result.state)
     )
-      fail("AI_OPERATION_FAILED");
+      fail("AI_OPERATION_FAILED", "instance/mods/install_status: the node returned a mismatched task ID or unsupported task state.");
     return {
       ...instance,
       taskId,
@@ -417,8 +418,8 @@ export async function executeModTool(
       downloadedBytes: number(result.downloadedBytes),
       totalBytes: number(result.totalBytes),
       checksumVerified: false,
-      ...(["file_exists", "busy", "download_failed"].includes(result.error)
-        ? { error: result.error }
+      ...(result.error || result.state === "failed"
+        ? { error: access.errorDetail(result.error) }
         : {})
     };
   }
@@ -451,7 +452,7 @@ export async function executeModTool(
       environment
     });
     check();
-    if (!Array.isArray(result?.hits)) fail("AI_OPERATION_FAILED");
+    if (!Array.isArray(result?.hits)) fail("AI_OPERATION_FAILED", "The mod catalog search response is missing the hits list.");
     return {
       offset,
       limit,
@@ -472,7 +473,7 @@ export async function executeModTool(
   if (source !== "modrinth" && !/^\d+$/.test(projectId)) fail("AI_INVALID_TOOL");
   const versions = await service.getProjectVersions(projectId, source);
   check(instance);
-  if (!Array.isArray(versions)) fail("AI_OPERATION_FAILED");
+  if (!Array.isArray(versions)) fail("AI_OPERATION_FAILED", "The mod catalog returned an invalid version list.");
   const files = (version: ObjectValue) =>
     Array.isArray(version.files)
       ? version.files.filter(
@@ -559,7 +560,7 @@ export async function executeModTool(
     typeof result.taskId !== "string" ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(result.taskId)
   )
-    fail("AI_OPERATION_FAILED");
+    fail("AI_OPERATION_FAILED", "instance/mods/install: the node did not accept the download or returned an invalid taskId.");
   access.log(
     instance!,
     `${type === "plugin" ? "plugins" : "mods"}/${file.filename}`,

@@ -48,7 +48,8 @@ export const pluginConfigDefinitions = [
 
 interface Access {
   check(): void;
-  fail(key: string): never;
+  fail(key: string, reason?: string): never;
+  errorDetail(error: unknown, secrets?: readonly string[]): string;
   remote(daemonId: string): { request(event: string, data?: unknown): Promise<any> };
   beforeWrite?(): Promise<void>;
   operatorName: string;
@@ -116,6 +117,16 @@ function publicValues(fields: PanelSettingField[], values: Values, listItem = fa
     }
   }
   return result;
+}
+
+function secretValues(fields: PanelSettingField[], values: Values): string[] {
+  return fields.filter(fieldKey).flatMap((field) => {
+    const value = values[field.key];
+    if (field.secret && typeof value === "string") return [value];
+    if (field.type === "list" && Array.isArray(value))
+      return value.flatMap((item) => object(item) ? secretValues(field.fields || [], item) : []);
+    return [];
+  });
 }
 
 function mergeValues(
@@ -192,7 +203,7 @@ export async function executePluginConfigTool(
   access.check();
   const inventory = remote ? await remote.request("plugin/list") : ctx.plugins.inventory();
   access.check();
-  if (!Array.isArray(inventory)) access.fail("AI_OPERATION_FAILED");
+  if (!Array.isArray(inventory)) access.fail("AI_OPERATION_FAILED", "plugin/list: expected a plugin inventory list.");
   if (name === "list_installed_plugins") {
     return {
       ...destination,
@@ -219,7 +230,7 @@ export async function executePluginConfigTool(
       (!object(schema) || schema.id !== pluginId ||
         !Array.isArray(schema.fields) || !object(schema.values))
     )
-      access.fail("AI_OPERATION_FAILED");
+      access.fail("AI_OPERATION_FAILED", "plugin/config: the response is missing or has mismatched id, fields or values.");
     return schema;
   };
   let schema = await read();
@@ -239,8 +250,8 @@ export async function executePluginConfigTool(
     const values = mergeValues(current.fields, current.values, patch, access);
     try {
       validatePluginSettings(current.fields, values);
-    } catch {
-      access.fail("AI_INVALID_TOOL");
+    } catch (error) {
+      access.fail("AI_INVALID_TOOL", access.errorDetail(error, secretValues(current.fields, values)));
     }
     return values;
   };
@@ -252,16 +263,25 @@ export async function executePluginConfigTool(
     values = prepare(schema);
   }
   access.check();
-  const result = remote
-    ? await remote.request("plugin/config/write", { id: pluginId, values })
-    : await ctx.settingsForm.write(pluginId, values);
+  const secrets = [
+    ...secretValues(schema?.fields || [], schema?.values || {}),
+    ...secretValues(schema?.fields || [], values)
+  ];
+  let result;
+  try {
+    result = remote
+      ? await remote.request("plugin/config/write", { id: pluginId, values })
+      : await ctx.settingsForm.write(pluginId, values);
+  } catch (error) {
+    throw new Error(`[plugin/config/write ${pluginId}] ${access.errorDetail(error, secrets)}`);
+  }
   if (
     !object(result) ||
     typeof result.saved !== "boolean" ||
     typeof result.application !== "string" ||
     !["applied", "pending", "failed", "restart-required"].includes(result.application)
   )
-    access.fail("AI_OPERATION_FAILED");
+    access.fail("AI_OPERATION_FAILED", "plugin/config/write: the response is missing saved or has an unsupported application state.");
   if (result.saved) {
     const operator = { operator_name: access.operatorName, operator_ip: access.operatorIp };
     if (daemonId) ctx.operations.log("daemon_config_change", { ...operator, daemon_id: daemonId });
@@ -277,6 +297,10 @@ export async function executePluginConfigTool(
     }
     access.check();
   }
-  // Plugin validation/activation errors may contain credentials; return only the outcome.
-  return { ...destination, pluginId, saved: result.saved, application: result.application };
+  return {
+    ...destination, pluginId, saved: result.saved, application: result.application,
+    ...(result.application === "failed" || !result.saved
+      ? { error: access.errorDetail(result.error, secrets) }
+      : {})
+  };
 }

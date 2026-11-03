@@ -244,6 +244,97 @@ function fixture({
   };
 }
 
+test("tool error details preserve HTTP, network, filesystem and nested daemon causes", () => {
+  const { toolErrorDetail } = loader()(source + "backend/tool_error.ts");
+  for (const [error, expected] of [
+    [Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }), /ECONNREFUSED.*connect refused/],
+    [new Error("EACCES: permission denied, open '/srv/server/server.properties'"), /EACCES.*server.properties/],
+    [{ response: { status: 403, data: { error: { message: "Artifact access denied" } } } }, /HTTP 403.*Artifact access denied/],
+    [new Error('{"err":"Disk quota exceeded","config":{"apiKey":"HIDDEN"}}'), /Disk quota exceeded/],
+    [new Error("Download failed", { cause: Object.assign(new Error("lookup failed"), { code: "ENOTFOUND" }) }), /Download failed.*ENOTFOUND.*lookup failed/],
+    ["node disconnected", /node disconnected/]
+  ]) {
+    const detail = toolErrorDetail(error, "No backend error details");
+    assert.match(detail, expected);
+    assert.doesNotMatch(detail, /HIDDEN|apiKey|config/);
+  }
+  for (const error of [null, {}, new Error(), "[object Object]", '{"config":{"password":"HIDDEN"}}'])
+    assert.equal(toolErrorDetail(error, "No backend error details"), "No backend error details");
+  const cyclic = new Error("Original failure");
+  cyclic.cause = cyclic;
+  assert.equal(toolErrorDetail(cyclic, "fallback"), "Original failure");
+});
+
+test("tool error details redact credentials and signed URLs before bounding output", () => {
+  const { toolErrorDetail } = loader()(source + "backend/tool_error.ts");
+  const secret = "CONFIGURED_SECRET_".repeat(200);
+  const detail = toolErrorDetail(new Error([
+    "EACCES: download denied", secret,
+    'password="PASSWORD WITH SPACES" rconPassword=RCON_SECRET api_key=API_SECRET',
+    "Authorization: Bearer AUTH_SECRET\nCookie: session=SESSION_SECRET; refresh=REFRESH_SECRET\n",
+    "https://USER:PASS@downloads.example/private.jar?signature=SIGNED_SECRET#FRAGMENT_SECRET",
+    "\n    at privateFunction (/private/internal/file.ts:1:1)"
+  ].join(" ")), "fallback", [secret]);
+  assert.match(detail, /EACCES: download denied/);
+  assert.match(detail, /downloads.example/);
+  assert.doesNotMatch(detail, /CONFIGURED_SECRET_|PASSWORD WITH SPACES|RCON_SECRET|API_SECRET|AUTH_SECRET|SESSION_SECRET|REFRESH_SECRET|USER|PASS|SIGNED_SECRET|FRAGMENT_SECRET|privateFunction|internal\/file|private.jar/);
+  assert.ok(detail.length <= 2000);
+  assert.equal(toolErrorDetail("x".repeat(3000), "fallback").length, 2000);
+});
+
+test("tool failures deliver detailed redacted reasons to the model, stream and saved history", async () => {
+  let round = 0;
+  let modelReceipt;
+  const f = fixture({ completion: async (_config, messages) => {
+    if (!round++) return call("control_instance", { ...own, action: "start" });
+    modelReceipt = JSON.parse(messages.findLast((message) => message.role === "tool").content);
+    return answer(modelReceipt.error);
+  } });
+  f.remote(async () => {
+    throw Object.assign(new Error("Permission denied; NODE_SECRET PROVIDER_SECRET"), {
+      code: "EACCES", response: { status: 403, data: { error: "Java executable is not executable" } },
+      config: { headers: { Authorization: "CONFIG_HEADER_SECRET" } }
+    });
+  });
+  const events = [];
+  const result = await f.chat.chat(f.request(), async (event) => events.push(structuredClone(event)));
+  const message = result.messages.find((message) => message.role === "tool");
+  assert.equal(message.ok, false);
+  assert.equal(modelReceipt.tool, "control_instance");
+  assert.match(modelReceipt.error, /node-a \/ instance\/open/);
+  assert.match(modelReceipt.error, /HTTP 403.*EACCES.*Java executable is not executable/);
+  assert.match(modelReceipt.error, /Permission denied/);
+  assert.equal(events.findLast((event) => event.message?.role === "tool").message.content, message.content);
+  const history = await f.chat.readHistory(f.request(), result.conversationId);
+  assert.equal(history.messages.find((message) => message.role === "tool").content, message.content);
+  assert.doesNotMatch(JSON.stringify([result, events, history, modelReceipt]), /NODE_SECRET|PROVIDER_SECRET|CONFIG_HEADER_SECRET/);
+  assert.equal(f.calls.length, 1);
+});
+
+test("tool argument and invalid response failures explain the missing field or acknowledgement", async () => {
+  const f = fixture();
+  await assert.rejects(f.tools().execute("get_instance", { daemonId: "node-a" }), /Missing required argument.*instanceUuid/);
+  await assert.rejects(f.tools().execute("get_instance", { ...own, invalid: true }), /Unsupported argument.*invalid.*Allowed/);
+  f.remote(async () => null);
+  await assert.rejects(f.tools().execute("send_instance_command", { ...own, command: "list" }), /instance\/command.*acknowledgement/);
+  f.remote(async () => ({ items: [] }));
+  await assert.rejects(f.tools().execute("read_file", { ...own, path: "missing.txt" }), /File not found: missing.txt/);
+});
+
+test("failed downloads retain their sanitized cause and show as failed tool results", async () => {
+  let round = 0;
+  const taskId = "12345678-1234-1234-1234-123456789abc";
+  const f = fixture({ completion: async () => round++
+    ? answer()
+    : call("wait_download_task", { ...own, taskType: "mod", taskId }) });
+  f.remote(async () => ({ taskId, state: "failed", error: "ENOSPC: no space left on device; apiKey=NODE_SECRET" }));
+  const result = await f.chat.chat(f.request());
+  const message = result.messages.find((message) => message.role === "tool");
+  assert.equal(message.ok, false);
+  assert.match(JSON.parse(message.content).error, /ENOSPC: no space left on device/);
+  assert.doesNotMatch(JSON.stringify(result), /NODE_SECRET/);
+});
+
 function pluginFixture(options = {}) {
   const f = fixture({ admin: true, ...options });
   const fields = [
@@ -288,7 +379,7 @@ function pluginFixture(options = {}) {
   const writes = [];
   const reads = [];
   const changeResult = { saved: true, application: "applied" };
-  const validate = f.load("common/src/plugin_contract.ts").validatePluginSettings;
+  const validate = f.load(source + "backend/catalog/settings_validation.ts").validatePluginSettings;
   const read = (scope, id) => {
     reads.push({ scope, id });
     return structuredClone((scope === "node" ? nodeSchemas : schemas).get(id));
@@ -537,13 +628,15 @@ test("unavailable nodes are rejected before plugin writes or approval", async ()
 test("plugin writes report application state and keep successful saves when overview refresh fails", async () => {
   const f = pluginFixture();
   for (const application of ["pending", "failed", "restart-required"]) {
-    Object.assign(f.changeResult, { application, error: "ACTIVATION_SECRET" });
+    Object.assign(f.changeResult, { application, error: "Activation failed for PLUGIN_SECRET; token=ACTIVATION_SECRET" });
     const result = await f.tools().execute("update_plugin_config", {
       ...pluginTarget, values: { enabled: false }
     });
     assert.equal(result.saved, true);
     assert.equal(result.application, application);
-    assert.doesNotMatch(JSON.stringify(result), /SECRET|error/);
+    assert.doesNotMatch(JSON.stringify(result), /PLUGIN_SECRET|ACTIVATION_SECRET/);
+    if (application === "failed") assert.match(result.error, /Activation failed/);
+    else assert.equal(result.error, undefined);
   }
   f.remote(async (event, data) => {
     if (event === "plugin/list") return f.inventory();
@@ -592,12 +685,13 @@ test("uncertain plugin writes cannot replay with a fresh call ID or leak writer 
   let writes = 0;
   f.ctx.settingsForm.write = async () => {
     writes++;
-    throw new Error("WRITE_SECRET");
+    throw new Error("EACCES: write denied for PLUGIN_SECRET and FIRST_SECRET; token=WRITE_SECRET");
   };
   const result = await f.chat.chat(f.request({ message: "Change this plugin setting" }));
   assert.equal(writes, 1);
   assert.ok(result.messages.some((message) => message.content.includes("AI_OPERATION_FAILED")));
-  assert.doesNotMatch(JSON.stringify(result), /WRITE_SECRET/);
+  assert.match(result.messages.find((message) => message.role === "tool").content, /EACCES: write denied/);
+  assert.doesNotMatch(JSON.stringify(result), /WRITE_SECRET|PLUGIN_SECRET|FIRST_SECRET/);
 });
 
 test("regular users only enumerate their own exact node/instance pairs and no secrets", async () => {
@@ -2185,7 +2279,11 @@ test("MSL creation reuses daemon installation, projects its receipt and distingu
   task.detail.completed = true;
   assert.equal((await f.tools().execute("get_msl_install_status", query)).state, "completed");
   task.status = -1;
-  task.detail.error = "SECRET download URL";
+  task.detail.error = "ENOSPC: no space left on device; apiKey=NODE_SECRET";
+  assert.match(
+    (await f.tools().execute("get_msl_install_status", query)).error,
+    /ENOSPC: no space left on device/
+  );
   assert.doesNotMatch(
     JSON.stringify(await f.tools().execute("get_msl_install_status", query)),
     /SECRET/
@@ -2263,7 +2361,7 @@ test("uncertain MSL creation cannot be repeated with a fresh tool call ID", asyn
   });
   f.remote(async (event) => {
     if (event === "info/overview") return { features: { minecraftInstall: true } };
-    if (event === "instance/asynchronous") throw new Error("SECRET connection lost");
+    if (event === "instance/asynchronous") throw new Error("NODE_SECRET connection lost");
   });
   const result = await f.chat.chat(f.request({ message: "Create a Paper server" }));
   assert.equal(f.calls.filter((entry) => entry.event === "instance/asynchronous").length, 1);
@@ -2276,11 +2374,9 @@ test("all 12 plugin catalogues contain the same complete translations", () => {
     .readdirSync(directory)
     .filter((file) => file.endsWith(".json"))
     .sort();
-  const hostLanguages = fs
-    .readdirSync(path.join(root, "panel/plugins/i18n/src/languages"))
-    .filter((file) => file.endsWith(".json"))
-    .sort();
-  assert.deepEqual(files, hostLanguages);
+  const { localeMessages } = loader()(source + "i18n/index.ts");
+  assert.equal(files.length, 12);
+  assert.deepEqual(files.map((file) => file.replace(/\.json$/, "").toLowerCase()).sort(), Object.keys(localeMessages).sort());
   const english = JSON.parse(fs.readFileSync(path.join(directory, "en_US.json")));
   for (const file of files) {
     const messages = JSON.parse(fs.readFileSync(path.join(directory, file)));
@@ -2290,7 +2386,10 @@ test("all 12 plugin catalogues contain the same complete translations", () => {
   }
 });
 
-test("HTTP routes enforce authentication and disappear when the guard plugin unloads", async (t) => {
+test("HTTP routes enforce authentication and disappear when the guard plugin unloads", {
+  skip: !fs.existsSync(path.join(root, "panel/plugins/server/src/backend/koa.ts")) &&
+    "Host server sources are not included in this npm workspace."
+}, async (t) => {
   const { Context } = panelRequire("cordis");
   const Koa = panelRequire("koa");
   const compose = panelRequire("koa-compose");
@@ -3494,7 +3593,7 @@ test("installed mod and task projections hide unrelated transfers and raw errors
       : {
           taskId: modTaskId,
           state: "failed",
-          error: "https://PRIVATE_URL/",
+          error: "https://downloads.example/private/file.jar?signature=PRIVATE_URL",
           path: "/other/private.jar",
           downloadTasks: ["PRIVATE"]
         }
@@ -3698,7 +3797,7 @@ for (const outcome of ["completed", "failed", "unknown", "network", "permission"
     const taskId = "12345678-1234-1234-1234-123456789abc";
     const events = [];
     f.remote(async () => {
-      if (outcome === "network") throw new Error("PRIVATE_NETWORK_ERROR");
+      if (outcome === "network") throw new Error("ECONNRESET: connection lost; apiKey=NODE_SECRET");
       return { taskId, state: outcome };
     });
     if (outcome === "permission") f.users.get("alice").instances = [];
@@ -3726,7 +3825,9 @@ for (const outcome of ["completed", "failed", "unknown", "network", "permission"
     const notices = f.chat.completedDownloadNotices("alice", "conversation");
     assert.equal(notices.length, 1);
     assert.match(notices[0], outcome === "completed" ? /completed/ : /failed/);
-    assert.doesNotMatch(JSON.stringify(events), /PRIVATE_NETWORK_ERROR/);
+    if (outcome === "network") assert.match(notices[0], /ECONNRESET: connection lost/);
+    if (outcome === "unknown") assert.match(notices[0], /not found for at least 10 seconds/);
+    assert.doesNotMatch(JSON.stringify([events, notices]), /NODE_SECRET/);
   });
 }
 

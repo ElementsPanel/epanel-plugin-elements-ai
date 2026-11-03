@@ -35,6 +35,7 @@
   "AI_INTERRUPTED": "La solicitud se interrumpió.",
   "AI_MODEL_LOOP_DETECTED": "Es posible que el modelo esté atrapado en un bucle infinito. La tarea se ha detenido.",
   "AI_OPERATION_FAILED": "La operación falló o su resultado es incierto. Comprueba la instancia antes de reintentar.",
+  "AI_TOOL_ERROR_NO_DETAIL": "El backend no devolvió detalles del error. Consulta los registros del panel o nodo para la herramienta y operación indicadas.",
   "AI_PROVIDER_FAILED": "El servicio de IA falló, agotó el tiempo o devolvió una respuesta inválida. Revisa el endpoint, la clave, el modelo y los tipos de herramientas admitidos. Las operaciones realizadas figuran arriba.",
   "AI_MODEL_INCOMPETENT": "La inteligencia de este modelo puede ser insuficiente para la gestión de servidores.\nSi este problema se produce con frecuencia, cambia a otro modelo.",
   "AI_ACCOUNT_CHANGED": "La cuenta cambió o cerraste sesión. Abre el asistente para iniciar otro chat.",

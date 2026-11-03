@@ -35,6 +35,7 @@
   "AI_INTERRUPTED": "Request interrupted.",
   "AI_MODEL_LOOP_DETECTED": "The model may be stuck in an infinite loop. The task has been stopped.",
   "AI_OPERATION_FAILED": "The panel operation failed or its outcome is uncertain. Check the instance before retrying.",
+  "AI_TOOL_ERROR_NO_DETAIL": "The backend returned no error details. Check the panel or node logs for the reported tool and node operation.",
   "AI_PROVIDER_FAILED": "The AI service failed, timed out or returned an invalid response. Check the endpoint, key, model and tool-call support. Completed operations are listed above.",
   "AI_MODEL_INCOMPETENT": "This model may lack the intelligence required for server management work.\nIf this happens frequently, switch to a different model.",
   "AI_ACCOUNT_CHANGED": "The account changed or you signed out. Reopen the assistant to start a new chat.",
