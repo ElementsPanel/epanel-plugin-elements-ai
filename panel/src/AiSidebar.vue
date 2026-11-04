@@ -1418,9 +1418,12 @@ onBeforeUnmount(() => reset(true));
 }
 .ai-message--user {
   margin-left: 24px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background-color: rgb(var(--v-theme-surface-variant, 240, 240, 240));
 }
-.ai-message--user .ai-text {
-  background: rgba(var(--v-theme-on-surface), 0.06);
+.ai-message--user :deep(.ai-text) {
+  padding: 0;
 }
 .ai-message--assistant {
   margin-right: 8px;
